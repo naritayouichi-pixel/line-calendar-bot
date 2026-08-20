@@ -398,7 +398,7 @@ function buildBookingListMessage(bookings, todayStr) {
   if (bookings.length === 0) {
     return {
       type: 'text',
-      text: '現在、変更・キャンセル可能なご予約はありません。',
+      text: '現在表示できるご予約はありません。',
     };
   }
 
@@ -415,7 +415,9 @@ function buildBookingListMessage(bookings, todayStr) {
       type: 'carousel',
       contents: sorted.slice(0, 10).map((b) => {
         const dateLabel = dayjs(b.dateStr).format('YYYY年M月D日(ddd)');
-        const isToday = b.dateStr <= todayStr;
+        const isPast = b.dateStr < todayStr;
+        const isToday = b.dateStr === todayStr;
+        const isLocked = isPast || isToday;
 
         return {
           type: 'bubble',
@@ -438,11 +440,13 @@ function buildBookingListMessage(bookings, todayStr) {
                     },
                   ]
                 : []),
-              ...(isToday
+              ...(isLocked
                 ? [
                     {
                       type: 'text',
-                      text: '本日のご予約は変更・キャンセルを承っておりません。お電話にてご連絡ください。',
+                      text: isPast
+                        ? '過去のご予約です。変更・キャンセルはできません。'
+                        : '本日のご予約は変更・キャンセルを承っておりません。お電話にてご連絡ください。',
                       size: 'xs',
                       color: '#888888',
                       wrap: true,
@@ -452,7 +456,7 @@ function buildBookingListMessage(bookings, todayStr) {
                 : []),
             ],
           },
-          footer: isToday
+          footer: isLocked
             ? undefined
             : {
                 type: 'box',

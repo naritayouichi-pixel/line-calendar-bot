@@ -378,12 +378,33 @@ async function startReservationFlow(event, userId) {
 /**
  * 「予約確認」の表示処理。テキストの合言葉・リッチメニューのpostback両方から呼ぶ。
  */
-async function showBookingList(event, userId) {
-  const max = maxBookingDateStr();
-  const bookings = (await getBookingsWithSync(userId)).filter((b) => b.dateStr <= max);
+async function showBookingList(event, userId, requestedPage = 0) {
+  const monthStart = dayjs().tz(config.business.timezone).startOf('month').format('YYYY-MM-DD');
+  const bookings = (await getBookingsWithSync(userId))
+    .filter((b) => b.dateStr >= monthStart)
+    .sort((a, b) => `${a.dateStr} ${a.startTime}`.localeCompare(`${b.dateStr} ${b.startTime}`));
+  const pageSize = 10;
+  const lastPage = Math.max(0, Math.ceil(bookings.length / pageSize) - 1);
+  const page = Math.min(Math.max(0, Number(requestedPage) || 0), lastPage);
+  const pageBookings = bookings.slice(page * pageSize, (page + 1) * pageSize);
+  const messages = [buildBookingListMessage(pageBookings, todayStr())];
+  if (bookings.length > pageSize) {
+    const items = [];
+    if (page > 0) {
+      items.push({ type: 'action', action: { type: 'postback', label: '前の予約', data: `action=booking_list_page&page=${page - 1}` } });
+    }
+    if (page < lastPage) {
+      items.push({ type: 'action', action: { type: 'postback', label: '次の予約', data: `action=booking_list_page&page=${page + 1}` } });
+    }
+    messages.push({
+      type: 'text',
+      text: `予約一覧 ${page + 1}/${lastPage + 1}ページ`,
+      quickReply: { items },
+    });
+  }
   return client.replyMessage({
     replyToken: event.replyToken,
-    messages: [buildBookingListMessage(bookings, todayStr())],
+    messages,
   });
 }
 
@@ -456,7 +477,8 @@ async function syncExternalBookings(userId) {
     for (const name of names) {
       let events;
       try {
-        events = await searchEventsByName(staff.calendarId, name, todayStr());
+        const monthStart = dayjs().tz(config.business.timezone).startOf('month').format('YYYY-MM-DD');
+        events = await searchEventsByName(staff.calendarId, name, monthStart);
       } catch (err) {
         console.error(`カレンダー検索でエラー(${staff.name} / ${name}):`, err);
         continue;
@@ -885,6 +907,10 @@ async function handlePostback(event) {
   // リッチメニューの「予約確認」タブ(postbackアクション)
   if (data.action === 'menu_check_bookings') {
     return showBookingList(event, userId);
+  }
+
+  if (data.action === 'booking_list_page') {
+    return showBookingList(event, userId, data.page);
   }
 
   // リッチメニューの「会員種別」タブ(postbackアクション)
