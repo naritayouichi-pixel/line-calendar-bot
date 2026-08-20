@@ -182,7 +182,7 @@ async function deleteBooking(calendarId, eventId) {
 }
 
 /**
- * 指定した名前を含む、今日以降の予定をカレンダーから検索する。
+ * 指定した名前を含む、指定日以降の予定をカレンダーからすべて検索する。
  * (LINE経由ではなく、Googleカレンダーに直接入力された予約を見つけるために使う)
  * 戻り値: [{ id, summary, dateStr, startTime, endTime }, ...]
  */
@@ -191,16 +191,23 @@ async function searchEventsByName(calendarId, name, fromDateStr) {
   const timeMin = dayjs.tz(`${fromDateStr} 00:00`, tz).toISOString();
   const calendar = getCalendarClient();
 
-  const res = await calendar.events.list({
-    calendarId,
-    q: name,
-    timeMin,
-    singleEvents: true,
-    orderBy: 'startTime',
-    maxResults: 50,
-  });
+  const items = [];
+  let pageToken;
+  do {
+    const res = await calendar.events.list({
+      calendarId,
+      q: name,
+      timeMin,
+      singleEvents: true,
+      orderBy: 'startTime',
+      maxResults: 250,
+      pageToken,
+    });
+    items.push(...(res.data.items || []));
+    pageToken = res.data.nextPageToken;
+  } while (pageToken);
 
-  return (res.data.items || [])
+  return items
     .filter((ev) => ev.start && (ev.start.dateTime || ev.start.date)) // 終日予定以外も一応許容しつつ、日時がないものは除外
     .map((ev) => {
       const start = dayjs(ev.start.dateTime || ev.start.date).tz(tz);
