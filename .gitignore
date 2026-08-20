@@ -1,0 +1,14 @@
+node_modules/
+.env
+.env.*
+!.env.example
+.env 2.example
+env.yaml
+.DS_Store
+npm-debug.log*
+data/*.json
+!data/.gitkeep
+
+# ZIP展開時にできた旧版・重複ファイル（現行コードでは未使用）
+src/* 2.js
+setupRichMenu.js

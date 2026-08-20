@@ -1,0 +1,27 @@
+{
+  "name": "line-calendar-availability-bot",
+  "version": "1.0.0",
+  "description": "LINE公式アカウントからGoogleカレンダーの空き状況を確認するBot",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "check": "node --check src/index.js && node --check src/config.js && node --check src/calendarService.js && node --check src/lineService.js && node --check src/shiftSchedule.js && node --check src/bookingStore.js && node --check src/memberStore.js && node --check src/ticketStore.js && node --check src/customerStore.js && node --check src/platinumMembers.js && node --check src/platinumMemberStore.js && node --check src/reservationReminderStore.js && node --check src/seasonalGreeting.js && node --check src/bookingRelease.js && node --check src/webBookingToken.js && node --check src/webBookingService.js && node --check src/trialBookingStore.js && node --check src/trialBookingService.js && node --check src/squareService.js && node --check public/booking/app.js && node --check public/trial/app.js && node --check scripts/registerPlatinumMembers.js && node --check scripts/repairCustomerName.js && node --check scripts/setupRichMenu.js",
+    "test": "node --test test/*.test.js",
+    "check:external": "node scripts/checkConnectivity.js",
+    "migrate:firestore": "node scripts/migrateJsonToFirestore.js",
+    "test:ticket-auto": "node scripts/testTicketAutoConsumption.js",
+    "register:platinum": "node scripts/registerPlatinumMembers.js"
+  },
+  "dependencies": {
+    "@google-cloud/firestore": "^7.11.0",
+    "@line/bot-sdk": "^9.6.0",
+    "dayjs": "^1.11.11",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "googleapis": "^140.0.1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
