@@ -43,6 +43,8 @@ const {
   buildStaffCancelNotificationMessage,
   buildStaffChangeNotificationMessage,
   buildTicketPackageSelectionMessage,
+  buildAdminMemberManagementMessage,
+  buildAdminMonthlyPackageSelectionMessage,
   buildTicketSelfPurchaseSelectionMessage,
   buildTicketSelfPurchasedMessage,
   buildAdminBillingRequestMessage,
@@ -93,6 +95,9 @@ const pendingTicketAdmin = new Map();
 // 管理者が「月会費回数設定」の対話をしている途中の状態を覚えておくストア。
 // { step: 'awaiting_quota' | 'awaiting_customer_id', quota?: number }
 const pendingQuotaAdmin = new Map();
+
+// 管理者がプラチナ昇格・解除を行っている途中の状態。
+const pendingPlatinumAdmin = new Map();
 
 // 管理者が顧客名とLINEユーザーIDを紐づけている途中の状態。
 const pendingCustomerLinkAdmin = new Map();
@@ -324,7 +329,8 @@ async function isPlatinumMember(userId) {
     ...await bookingStore.getDistinctCustomerNames(userId),
   ];
   for (const name of names.filter(Boolean)) {
-    if (await platinumMemberStore.isPlatinumName(name)) return true;
+    const status = await platinumMemberStore.getStatus(name);
+    if (status !== null) return status;
   }
   // データベース登録前でも従来の固定名簿を使えるようにする。
   return names.some(isPlatinumMemberName);
@@ -517,6 +523,9 @@ const MEMBER_MENU_KEYWORD = '会員種別';
 // 管理者だけが使える、月会費メンバーの月あたり回数を設定するための合言葉。
 const MEMBER_QUOTA_KEYWORD = '月会費回数設定';
 
+// 管理者用の会員情報変更メニュー。
+const ADMIN_MEMBER_KEYWORD = '会員管理';
+
 // 管理者がGoogleカレンダー上の顧客名とLINEユーザーIDを紐づける合言葉。
 const CUSTOMER_LINK_KEYWORD = '顧客紐付け';
 
@@ -559,11 +568,13 @@ async function handleTextMessage(event) {
     CHECK_BOOKINGS_KEYWORD,
     MEMBER_MENU_KEYWORD,
     MEMBER_QUOTA_KEYWORD,
+    ADMIN_MEMBER_KEYWORD,
     CUSTOMER_LINK_KEYWORD,
   ];
   if (KNOWN_KEYWORDS.includes(text)) {
     pendingTicketAdmin.delete(userId); // 中断していたチケット管理者対話があれば解除する
     pendingQuotaAdmin.delete(userId); // 中断していた月会費回数設定対話があれば解除する
+    pendingPlatinumAdmin.delete(userId);
     pendingCustomerLinkAdmin.delete(userId); // 中断していた顧客紐付け対話があれば解除する
     pendingCustomerLinkSelf.delete(userId); // 中断していた自己紐付け対話があれば解除する
   } else {
@@ -596,6 +607,10 @@ async function handleTextMessage(event) {
     // 管理者が月会費回数設定の対話中であれば、そちらを優先する
     if (userId && pendingQuotaAdmin.has(userId)) {
       return handleQuotaAdminDialogue(event, userId, text);
+    }
+
+    if (userId && pendingPlatinumAdmin.has(userId)) {
+      return handlePlatinumAdminDialogue(event, userId, text);
     }
 
     if (userId && pendingCustomerLinkAdmin.has(userId)) {
@@ -641,6 +656,14 @@ async function handleTextMessage(event) {
     return client.replyMessage({
       replyToken: event.replyToken,
       messages: [buildAdminAskQuotaMessage()],
+    });
+  }
+
+  if (text === ADMIN_MEMBER_KEYWORD) {
+    if (!config.adminUserIds.includes(userId)) return null;
+    return client.replyMessage({
+      replyToken: event.replyToken,
+      messages: [buildAdminMemberManagementMessage()],
     });
   }
 
@@ -743,15 +766,38 @@ async function handleQuotaAdminDialogue(event, adminUserId, text) {
     const knownNames = await bookingStore.getDistinctCustomerNames(customerId);
     const name = knownNames[0] || await memberStore.getName(customerId) || null;
 
-    await memberStore.addMember(customerId, name, state.quota);
+    await memberStore.addMember(customerId, name, state.quota, state.duration);
     return client.replyMessage({
       replyToken: event.replyToken,
-      messages: [buildAdminQuotaSetMessage(customerId, state.quota)],
+      messages: [buildAdminQuotaSetMessage(customerId, state.quota, state.duration)],
     });
   }
 
   pendingQuotaAdmin.delete(adminUserId);
   return replyText(event, '入力内容が分からなかったため、最初からやり直してください。');
+}
+
+async function handlePlatinumAdminDialogue(event, adminUserId, text) {
+  const state = pendingPlatinumAdmin.get(adminUserId);
+  const customerId = text.trim();
+  if (!customerId.startsWith('U') || customerId.length < 10) {
+    return replyText(event, 'LINEユーザーIDの形式が正しくありません。Uから始まるIDをもう一度送ってください。');
+  }
+  const names = [
+    await customerStore.getName(customerId),
+    await memberStore.getName(customerId),
+    ...(await bookingStore.getDistinctCustomerNames(customerId)),
+  ].filter(Boolean);
+  const name = names[0];
+  if (!name) return replyText(event, 'お名前が未登録です。先に「顧客紐付け」を行ってください。');
+
+  pendingPlatinumAdmin.delete(adminUserId);
+  if (state.mode === 'register') {
+    await platinumMemberStore.register(name);
+    return replyText(event, `${name}様をプラチナ会員へ昇格しました。`);
+  }
+  await platinumMemberStore.unregister(name);
+  return replyText(event, `${name}様のプラチナ登録を解除し、通常の月会費会員へ変更しました。`);
 }
 
 /**
@@ -795,6 +841,31 @@ async function handleCustomerLinkAdminDialogue(event, adminUserId, text) {
 async function handlePostback(event) {
   const data = parsePostbackData(event.postback.data);
   const userId = event.source.userId;
+
+  if (data.action === 'admin_ticket_add') {
+    if (!config.adminUserIds.includes(userId)) return null;
+    return client.replyMessage({ replyToken: event.replyToken, messages: [buildTicketPackageSelectionMessage()] });
+  }
+
+  if (data.action === 'admin_monthly_change') {
+    if (!config.adminUserIds.includes(userId)) return null;
+    return client.replyMessage({ replyToken: event.replyToken, messages: [buildAdminMonthlyPackageSelectionMessage()] });
+  }
+
+  if (data.action === 'admin_monthly_package') {
+    if (!config.adminUserIds.includes(userId)) return null;
+    const duration = Number(data.duration);
+    const quota = Number(data.quota);
+    pendingQuotaAdmin.set(userId, { step: 'awaiting_customer_id', duration, quota });
+    return replyText(event, `${duration}分×月${quota}回へ変更します。対象のお客様のLINEユーザーIDを貼り付けてください。`);
+  }
+
+  if (data.action === 'admin_platinum') {
+    if (!config.adminUserIds.includes(userId)) return null;
+    const mode = data.mode === 'unregister' ? 'unregister' : 'register';
+    pendingPlatinumAdmin.set(userId, { mode });
+    return replyText(event, `${mode === 'register' ? 'プラチナへ昇格' : 'プラチナを解除'}するお客様のLINEユーザーIDを貼り付けてください。`);
+  }
 
   // リッチメニューの「メニュー」ボタン → 「予約する」「予約確認・変更」「会員種別」の3択を表示
   if (data.action === 'menu_open') {

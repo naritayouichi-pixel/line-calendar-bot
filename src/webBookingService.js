@@ -22,7 +22,10 @@ async function isMember(userId) {
 async function isPlatinum(userId) {
   const configured = config.members.find((m) => m.lineUserId === userId)?.name;
   const names = [configured, await customerStore.getName(userId), await memberStore.getName(userId), ...await bookingStore.getDistinctCustomerNames(userId)].filter(Boolean);
-  for (const name of names) if (await platinumMemberStore.isPlatinumName(name)) return true;
+  for (const name of names) {
+    const status = await platinumMemberStore.getStatus(name);
+    if (status !== null) return status;
+  }
   return names.some(isPlatinumMemberName);
 }
 async function maxDate(userId) {

@@ -115,6 +115,13 @@ test('LINE menu builders produce valid message objects', () => {
   }
   const memberMenu = messages.buildMemberMenuMessage('ビジター', null);
   assert.ok(memberMenu.quickReply.items.some((item) => item.action.label === '顧客紐付け'));
+  const adminMenu = messages.buildAdminMemberManagementMessage();
+  assert.deepEqual(adminMenu.quickReply.items.map((item) => item.action.label), [
+    'チケット付与',
+    '月会費コース変更',
+    'プラチナ昇格',
+    'プラチナ解除',
+  ]);
   const confirmed = messages.buildBookingConfirmedMessage(
     '自由が丘店', '成田', '2026-08-12', '10:00', '11:00', '山田太郎'
   );
@@ -155,4 +162,11 @@ test('Firestore stores expose asynchronous persistence APIs', () => {
     const store = require(`../src/${name}`);
     assert.ok(Object.values(store).some((value) => typeof value === 'function'));
   }
+});
+
+test('platinum store supports explicit promotion and demotion overrides', () => {
+  const store = require('../src/platinumMemberStore');
+  assert.equal(typeof store.register, 'function');
+  assert.equal(typeof store.unregister, 'function');
+  assert.equal(typeof store.getStatus, 'function');
 });

@@ -695,6 +695,38 @@ function buildTicketPackageSelectionMessage() {
   };
 }
 
+function buildAdminMemberManagementMessage() {
+  return {
+    type: 'text',
+    text: '変更する内容を選んでください。',
+    quickReply: {
+      items: [
+        { type: 'action', action: { type: 'postback', label: 'チケット付与', data: 'action=admin_ticket_add' } },
+        { type: 'action', action: { type: 'postback', label: '月会費コース変更', data: 'action=admin_monthly_change' } },
+        { type: 'action', action: { type: 'postback', label: 'プラチナ昇格', data: 'action=admin_platinum&mode=register' } },
+        { type: 'action', action: { type: 'postback', label: 'プラチナ解除', data: 'action=admin_platinum&mode=unregister' } },
+      ],
+    },
+  };
+}
+
+function buildAdminMonthlyPackageSelectionMessage() {
+  const items = [];
+  for (const duration of [45, 60]) {
+    for (const quota of [4, 6]) {
+      items.push({
+        type: 'action',
+        action: {
+          type: 'postback',
+          label: `${duration}分×月${quota}回`,
+          data: `action=admin_monthly_package&duration=${duration}&quota=${quota}`,
+        },
+      });
+    }
+  }
+  return { type: 'text', text: '変更後の月会費コースを選んでください。', quickReply: { items } };
+}
+
 /**
  * お客様自身がチケットを購入(自己申告で追加)するための選択メッセージ。
  * 管理者向けのbuildTicketPackageSelectionMessageとは別のpostbackアクションを使う
@@ -809,10 +841,10 @@ function buildAdminAskCustomerIdForQuotaMessage(quota) {
 /**
  * 月会費回数の設定が完了したことを、管理者に知らせる確認メッセージ。
  */
-function buildAdminQuotaSetMessage(customerId, quota) {
+function buildAdminQuotaSetMessage(customerId, quota, duration = null) {
   return {
     type: 'text',
-    text: `月会費メンバーとして登録しました。\n対象ID: ${customerId}\n月あたりの予約回数: ${quota}回`,
+    text: `月会費メンバーとして登録しました。\n対象ID: ${customerId}${duration ? `\nコース: ${duration}分×月${quota}回` : `\n月あたりの予約回数: ${quota}回`}`,
   };
 }
 
@@ -983,6 +1015,8 @@ module.exports = {
   buildStaffChangeNotificationMessage,
   buildCurrentBookingsSummaryMessage,
   buildTicketPackageSelectionMessage,
+  buildAdminMemberManagementMessage,
+  buildAdminMonthlyPackageSelectionMessage,
   buildTicketSelfPurchaseSelectionMessage,
   buildTicketSelfPurchasedMessage,
   buildAdminBillingRequestMessage,
