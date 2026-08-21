@@ -9,7 +9,7 @@ const messages = require('../src/lineService');
 const { app } = require('../src/index');
 const platinum = require('../src/platinumMembers');
 const { getSeasonalGreeting } = require('../src/seasonalGreeting');
-const { isMonthlyBookingReleased, monthlyBookingMaxDate } = require('../src/bookingRelease');
+const { isMonthlyBookingReleased, monthlyBookingMaxDate, bookingCalendarMaxDate } = require('../src/bookingRelease');
 const { createWebBookingToken, verifyWebBookingToken } = require('../src/webBookingToken');
 const { normalizeCustomerName, isPairCustomerName } = require('../src/customerStore');
 
@@ -77,6 +77,11 @@ test('released monthly members can reserve through the end of next month', () =>
     monthlyBookingMaxDate(dayjs('2026-12-25T10:00:00'), 25, 10, '2027-01-24'),
     '2027-01-31'
   );
+});
+
+test('standard booking calendar is not limited to 30 days and ends next month', () => {
+  assert.equal(bookingCalendarMaxDate(dayjs('2026-08-22T10:00:00')), '2026-09-30');
+  assert.equal(bookingCalendarMaxDate(dayjs('2026-01-31T10:00:00')), '2026-02-28');
 });
 
 test('web booking links securely preserve the existing LINE user ID', () => {

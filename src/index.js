@@ -22,7 +22,7 @@ const { isPlatinumMemberName } = require('./platinumMembers');
 const platinumMemberStore = require('./platinumMemberStore');
 const reservationReminderStore = require('./reservationReminderStore');
 const { getSeasonalGreeting } = require('./seasonalGreeting');
-const { isMonthlyBookingReleased, monthlyBookingMaxDate } = require('./bookingRelease');
+const { isMonthlyBookingReleased, monthlyBookingMaxDate, bookingCalendarMaxDate } = require('./bookingRelease');
 const { createWebBookingToken, verifyWebBookingToken } = require('./webBookingToken');
 const webBookingService = require('./webBookingService');
 const trialBookingService = require('./trialBookingService');
@@ -315,7 +315,7 @@ async function notifyCompanyForTomorrow(dateStr, message) {
 }
 
 function maxBookingDateStr() {
-  return dayjs().tz(config.business.timezone).add(config.business.maxDaysAhead, 'day').format('YYYY-MM-DD');
+  return bookingCalendarMaxDate(dayjs().tz(config.business.timezone));
 }
 
 /**

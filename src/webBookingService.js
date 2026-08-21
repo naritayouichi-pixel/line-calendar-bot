@@ -8,7 +8,7 @@ const memberStore = require('./memberStore');
 const ticketStore = require('./ticketStore');
 const platinumMemberStore = require('./platinumMemberStore');
 const { isPlatinumMemberName } = require('./platinumMembers');
-const { monthlyBookingMaxDate } = require('./bookingRelease');
+const { monthlyBookingMaxDate, bookingCalendarMaxDate } = require('./bookingRelease');
 const { normalizeCustomerName } = require('./customerStore');
 
 function findStaff(id) { return config.staff.find((staff) => staff.id === id); }
@@ -30,7 +30,7 @@ async function isPlatinum(userId) {
 }
 async function maxDate(userId) {
   const now = dayjs().tz(config.business.timezone);
-  const normalMax = now.add(config.business.maxDaysAhead, 'day').format('YYYY-MM-DD');
+  const normalMax = bookingCalendarMaxDate(now);
   if (!await isMember(userId)) return normalMax;
   const openDay = await isPlatinum(userId) ? config.booking.platinumNextMonthOpenDay : config.booking.memberNextMonthOpenDay;
   return monthlyBookingMaxDate(now, openDay, config.booking.memberNextMonthOpenHour, normalMax);

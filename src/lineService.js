@@ -4,6 +4,7 @@ const timezone = require('dayjs/plugin/timezone');
 require('dayjs/locale/ja');
 const config = require('./config');
 const { STORES, STAFF_PHOTOS, getShiftsForDate } = require('./shiftSchedule');
+const { bookingCalendarMaxDate } = require('./bookingRelease');
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -79,7 +80,7 @@ function buildStoreSelectionMessage(extraParams = '') {
  */
 function buildDatePickerMessage(storeId, storeName, extraParams = '', maxDateStrOverride = null) {
   const today = dayjs().tz(config.business.timezone);
-  const defaultMax = today.add(config.business.maxDaysAhead, 'day').format('YYYY-MM-DD');
+  const defaultMax = bookingCalendarMaxDate(today);
   // 月会費メンバーの「来月分は25日から」制限がある場合、外部から上限日を指定できる
   const max = maxDateStrOverride && maxDateStrOverride < defaultMax ? maxDateStrOverride : defaultMax;
 

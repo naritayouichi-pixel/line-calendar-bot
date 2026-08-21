@@ -3,6 +3,10 @@ function isMonthlyBookingReleased(now, openDay, openHour) {
   return now.hour() >= openHour;
 }
 
+function bookingCalendarMaxDate(now) {
+  return now.add(1, 'month').endOf('month').format('YYYY-MM-DD');
+}
+
 function monthlyBookingMaxDate(now, openDay, openHour, normalMaxDate) {
   if (!isMonthlyBookingReleased(now, openDay, openHour)) {
     const currentMonthEnd = now.endOf('month').format('YYYY-MM-DD');
@@ -14,4 +18,4 @@ function monthlyBookingMaxDate(now, openDay, openHour, normalMaxDate) {
   return nextMonthEnd > normalMaxDate ? nextMonthEnd : normalMaxDate;
 }
 
-module.exports = { isMonthlyBookingReleased, monthlyBookingMaxDate };
+module.exports = { isMonthlyBookingReleased, monthlyBookingMaxDate, bookingCalendarMaxDate };
