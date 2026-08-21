@@ -208,7 +208,8 @@ async function searchEventsByName(calendarId, name, fromDateStr) {
   } while (pageToken);
 
   return items
-    .filter((ev) => ev.start && (ev.start.dateTime || ev.start.date)) // 終日予定以外も一応許容しつつ、日時がないものは除外
+    // 終日予定や記念日を顧客予約として取り込まない。開始・終了時刻のある予定だけを対象にする。
+    .filter((ev) => ev.start?.dateTime && ev.end?.dateTime)
     .map((ev) => {
       const start = dayjs(ev.start.dateTime || ev.start.date).tz(tz);
       const end = dayjs(ev.end.dateTime || ev.end.date).tz(tz);

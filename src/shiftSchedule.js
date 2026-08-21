@@ -156,6 +156,25 @@ function getStoreForStaffOnDate(staffId, dateStr) {
   return null;
 }
 
+/**
+ * Googleカレンダーへ直接入力された予約の店舗を、日付・スタッフ・開始時刻から判定する。
+ * 同じ日に別店舗へ移動するスタッフでも、該当時間を含むシフトの店舗を返す。
+ */
+function getStoreForStaffAtTime(staffId, dateStr, startTime) {
+  for (const store of STORES) {
+    const { closed, shifts } = getShiftsForDate(store.id, dateStr);
+    if (closed) continue;
+    const matches = shifts.some((shift) => {
+      if (shift.staffId !== staffId) return false;
+      const start = shift.start || BUSINESS_START;
+      const end = shift.end || BUSINESS_END;
+      return start <= startTime && startTime < end;
+    });
+    if (matches) return store;
+  }
+  return null;
+}
+
 module.exports = {
   STORES,
   STAFF_PHOTOS,
@@ -163,5 +182,6 @@ module.exports = {
   getShiftsForDate,
   getWeekdayKey,
   getStoreForStaffOnDate,
+  getStoreForStaffAtTime,
   groupShiftsByStaff,
 };

@@ -13,7 +13,7 @@ const {
   searchEventsByName,
   hasFullDayBlock,
 } = require('./calendarService');
-const { getStore, getShiftsForDate, getStoreForStaffOnDate, groupShiftsByStaff } = require('./shiftSchedule');
+const { getStore, getShiftsForDate, getStoreForStaffAtTime, groupShiftsByStaff } = require('./shiftSchedule');
 const bookingStore = require('./bookingStore');
 const ticketStore = require('./ticketStore');
 const memberStore = require('./memberStore');
@@ -511,11 +511,13 @@ async function syncExternalBookings(userId) {
       for (const ev of events) {
         if (await bookingStore.findByEventId(ev.id)) continue; // 既に取り込み済み
 
-        const store = getStoreForStaffOnDate(staff.id, ev.dateStr);
+        const store = getStoreForStaffAtTime(staff.id, ev.dateStr, ev.startTime);
+        // シフト時間外の予定は、店舗を安全に特定できないため予約として自動取り込みしない。
+        if (!store) continue;
         await bookingStore.addBooking({
           userId,
-          storeId: store ? store.id : null,
-          storeName: store ? store.name : '店舗未確認',
+          storeId: store.id,
+          storeName: store.name,
           staffId: staff.id,
           staffName: staff.name,
           calendarId: staff.calendarId,

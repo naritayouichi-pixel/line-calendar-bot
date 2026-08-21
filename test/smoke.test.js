@@ -43,6 +43,13 @@ test('Furuya Sunday shifts switch stores at the configured times', () => {
   ));
 });
 
+test('direct calendar bookings resolve the store using the appointment time', () => {
+  assert.equal(shifts.getStoreForStaffAtTime('narita', '2026-09-18', '15:00').id, 'jiyugaoka');
+  assert.equal(shifts.getStoreForStaffAtTime('narita', '2026-09-18', '18:00').id, 'motosumiyoshi');
+  assert.equal(shifts.getStoreForStaffAtTime('furuya', '2026-09-20', '16:00').id, 'jiyugaoka');
+  assert.equal(shifts.getStoreForStaffAtTime('furuya', '2026-09-20', '18:00').id, 'motosumiyoshi');
+});
+
 test('platinum members are recognized despite honorifics, spaces, or pair suffix', () => {
   assert.equal(platinum.PLATINUM_MEMBER_NAMES.length, 32);
   assert.equal(platinum.isPlatinumMemberName('吉原 教一郎様'), true);
