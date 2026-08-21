@@ -1,4 +1,5 @@
 const token = new URLSearchParams(location.search).get('token');
+const changeBookingId = new URLSearchParams(location.search).get('changeBookingId');
 const $ = (id) => document.getElementById(id);
 let data;
 let storeId;
@@ -9,7 +10,8 @@ const selections = new Map();
 
 async function api(path, options = {}) {
   const separator = path.includes('?') ? '&' : '?';
-  const response = await fetch(`/api/web-booking/${path}${separator}token=${encodeURIComponent(token || '')}`, {
+  const changeParam = changeBookingId ? `&changeBookingId=${encodeURIComponent(changeBookingId)}` : '';
+  const response = await fetch(`/api/web-booking/${path}${separator}token=${encodeURIComponent(token || '')}${changeParam}`, {
     headers: { 'content-type': 'application/json' }, ...options,
   });
   const result = await response.json();
@@ -55,6 +57,10 @@ async function init() {
     storeId = data.stores[0].id;
     weekStart = sunday(parseDate(data.minDate));
     $('name').textContent = data.customer.name;
+    if (data.changeBooking) {
+      document.querySelector('.hello span').textContent = `現在の予約：${data.changeBooking.dateStr} ${data.changeBooking.startTime}〜${data.changeBooking.endTime}　変更後の時間をお選びください`;
+      $('reviewSelections').textContent = '変更内容を確認する';
+    }
     $('member').innerHTML = `<strong>${data.customer.memberType}</strong>${data.customer.membershipDetail ? `<span>${data.customer.membershipDetail}</span>` : ''}`;
     $('stores').innerHTML = data.stores.map((store) => {
       const logoUrl = store.bookingLogoUrl || store.logoUrl;
@@ -164,6 +170,15 @@ function toggleSelection(button) {
   if (selections.has(key)) {
     selections.delete(key);
   } else {
+    if (changeBookingId) {
+      selections.clear();
+      document.querySelectorAll('.slot.selected').forEach((oldButton) => {
+        oldButton.classList.remove('selected');
+        oldButton.setAttribute('aria-pressed', 'false');
+        const label = oldButton.querySelector('b');
+        if (label) label.textContent = oldButton.dataset.name;
+      });
+    }
     const sameTime = [...selections.values()].some((item) => item.date === selection.date && item.start === selection.start);
     if (sameTime) return alert('同じ日時の予約は1件だけ選択できます。');
     const limitError = selectionLimitError(selection);
@@ -184,7 +199,7 @@ function openConfirm() {
     return `<div class="selection-item">${photo ? `<img src="${photo}" alt="${selection.name}トレーナー">` : ''}<span><strong>${selection.date} ${selection.start}〜${selection.end}</strong><br>${store.name}／${selection.name}トレーナー</span></div>`;
   }).join('')}</div>`;
   $('confirm').hidden = false;
-  $('confirm').textContent = `${rows.length}件をまとめて予約する`;
+  $('confirm').textContent = changeBookingId ? 'この内容に変更する' : `${rows.length}件をまとめて予約する`;
   $('cancel').textContent = '戻る';
   $('modal').hidden = false;
 }
@@ -200,7 +215,7 @@ $('confirm').onclick = async () => {
   for (const [key, item] of queue) {
     button.textContent = `予約しています… ${completed + 1}/${queue.length}`;
     try {
-      await api('book', { method:'POST', body:JSON.stringify({ storeId:item.store, dateStr:item.date, staffId:item.staff, startTime:item.start, endTime:item.end }) });
+      await api(changeBookingId ? 'change' : 'book', { method:'POST', body:JSON.stringify({ storeId:item.store, dateStr:item.date, staffId:item.staff, startTime:item.start, endTime:item.end }) });
       selections.delete(key);
       markAllowanceUsed(item);
       completed += 1;
@@ -213,7 +228,7 @@ $('confirm').onclick = async () => {
     button.hidden = true;
     $('cancel').textContent = '閉じる';
   } else {
-    $('summary').innerHTML = `<strong>${completed}件の予約が完了しました</strong>`;
+    $('summary').innerHTML = `<strong>${changeBookingId ? '予約を変更しました' : `${completed}件の予約が完了しました`}</strong>`;
     button.hidden = true;
     $('cancel').textContent = '閉じる';
   }

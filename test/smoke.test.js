@@ -128,6 +128,13 @@ test('LINE menu builders produce valid message objects', () => {
   const calendarAction = confirmed.contents.footer.contents[0].action;
   assert.equal(calendarAction.type, 'uri');
   assert.match(calendarAction.uri, /^https:\/\/calendar\.google\.com\/calendar\/render\?/);
+  const bookingList = messages.buildBookingListMessage([{
+    bookingId: 'booking-1', storeName: '自由が丘店', staffName: '成田',
+    dateStr: '2099-08-12', startTime: '10:00', endTime: '11:00',
+  }], '2099-08-01', 'https://example.com/booking/?changeBookingId=');
+  const changeAction = bookingList.contents.contents[0].footer.contents[0].action;
+  assert.equal(changeAction.type, 'uri');
+  assert.equal(changeAction.uri, 'https://example.com/booking/?changeBookingId=booking-1');
 });
 
 test('main menu uses the customer-facing reservation tab labels', () => {
@@ -151,6 +158,7 @@ test('HTTP health, webhook, and ticket automation routes are registered', () => 
   assert.ok(routes.some((route) => route.path === '/api/web-booking/availability' && route.methods.get));
   assert.ok(routes.some((route) => route.path === '/api/web-booking/week-availability' && route.methods.get));
   assert.ok(routes.some((route) => route.path === '/api/web-booking/book' && route.methods.post));
+  assert.ok(routes.some((route) => route.path === '/api/web-booking/change' && route.methods.post));
   assert.ok(routes.some((route) => route.path === '/api/trial/bootstrap' && route.methods.get));
   assert.ok(routes.some((route) => route.path === '/api/trial/checkout' && route.methods.post));
   assert.ok(routes.some((route) => route.path === '/webhooks/square' && route.methods.post));

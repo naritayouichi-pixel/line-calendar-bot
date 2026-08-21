@@ -1,7 +1,7 @@
 const dayjs = require('dayjs');
 const config = require('./config');
 const { STORES, STAFF_PHOTOS, getStore, getShiftsForDate, groupShiftsByStaff } = require('./shiftSchedule');
-const { getAvailableSlots, getBookableStartTimes, createBooking, hasFullDayBlock } = require('./calendarService');
+const { getAvailableSlots, getBookableStartTimes, createBooking, deleteBooking, hasFullDayBlock } = require('./calendarService');
 const bookingStore = require('./bookingStore');
 const customerStore = require('./customerStore');
 const memberStore = require('./memberStore');
@@ -44,7 +44,7 @@ async function durationFor(userId) {
   }
   return await memberStore.getSessionDuration(userId) || config.booking.durationMinutes;
 }
-async function bootstrap(userId) {
+async function bootstrap(userId, changeBookingId = null) {
   const name = await customerStore.getName(userId);
   if (!name) throw new Error('先にLINEメニューの「会員種別・紐付け」から、お名前を登録してください。');
   try { normalizeCustomerName(name); }
@@ -64,13 +64,19 @@ async function bootstrap(userId) {
     for (let month = minDate.startOf('month'); !month.isAfter(maximumDate, 'month'); month = month.add(1, 'month')) {
       months.push(month.format('YYYY-MM'));
     }
-    const usedByMonth = Object.fromEntries(await Promise.all(months.map(async (month) => [month, await bookingStore.getMonthlyBookingCount(userId, month)])));
+    const usedByMonth = Object.fromEntries(await Promise.all(months.map(async (month) => [month, await bookingStore.getMonthlyBookingCount(userId, month, changeBookingId)])));
     bookingAllowance = { type: 'monthly', quota, usedByMonth };
   } else if (ticketCustomer) {
     const balance = await ticketStore.getBalance(userId, durationMinutes);
     membershipDetail = `${durationMinutes}分×${balance}回`;
-    const outstanding = await bookingStore.getOutstandingCount(userId, durationMinutes);
+    const outstanding = await bookingStore.getOutstandingCount(userId, durationMinutes, changeBookingId);
     bookingAllowance = { type: 'ticket', remaining: Math.max(0, balance - outstanding) };
+  }
+  let changeBooking = null;
+  if (changeBookingId) {
+    changeBooking = await bookingStore.getBooking(changeBookingId);
+    if (!changeBooking || changeBooking.userId !== userId || changeBooking.status !== 'confirmed') throw new Error('変更する予約が見つかりません。');
+    if (changeBooking.dateStr <= dayjs().tz(config.business.timezone).format('YYYY-MM-DD')) throw new Error('当日の予約はWEBから変更できません。店舗へご連絡ください。');
   }
   return {
     customer: {
@@ -84,12 +90,20 @@ async function bootstrap(userId) {
     durationMinutes,
     bookingAllowance,
     businessHours: { start: config.business.startHour, end: config.business.endHour },
+    changeBooking: changeBooking ? {
+      bookingId: changeBooking.bookingId,
+      storeName: changeBooking.storeName,
+      staffName: changeBooking.staffName,
+      dateStr: changeBooking.dateStr,
+      startTime: changeBooking.startTime,
+      endTime: changeBooking.endTime,
+    } : null,
   };
 }
-async function availability(userId, storeId, dateStr, suppliedInfo = null) {
+async function availability(userId, storeId, dateStr, suppliedInfo = null, changeBookingId = null) {
   const store = getStore(storeId);
   if (!store) throw new Error('店舗が見つかりません。');
-  const info = suppliedInfo || await bootstrap(userId);
+  const info = suppliedInfo || await bootstrap(userId, changeBookingId);
   if (dateStr < info.minDate || dateStr > info.maxDate) throw new Error('この日付はまだ予約できません。');
   const { closed, shifts } = getShiftsForDate(storeId, dateStr);
   if (closed) return { closed: true, staff: [] };
@@ -120,8 +134,8 @@ async function availability(userId, storeId, dateStr, suppliedInfo = null) {
   return { closed: false, staff: staffRows };
 }
 
-async function weekAvailability(userId, storeId, startDateStr) {
-  const info = await bootstrap(userId);
+async function weekAvailability(userId, storeId, startDateStr, changeBookingId = null) {
+  const info = await bootstrap(userId, changeBookingId);
   const dates = [...Array(7)].map((_, index) => dayjs(startDateStr).add(index, 'day').format('YYYY-MM-DD'));
   const results = await Promise.all(dates.map(async (dateStr) => {
     try {
@@ -163,4 +177,46 @@ async function book(userId, input) {
   return { bookingId, storeName: store.name, staffName: staff.name, customerName: info.customer.name, dateStr: input.dateStr, startTime: input.startTime, endTime: input.endTime };
 }
 
-module.exports = { bootstrap, availability, weekAvailability, book };
+async function change(userId, bookingId, input) {
+  if (!bookingId) throw new Error('変更する予約が指定されていません。');
+  const oldBooking = await bookingStore.getBooking(bookingId);
+  if (!oldBooking || oldBooking.userId !== userId || oldBooking.status !== 'confirmed') throw new Error('変更する予約が見つかりません。');
+  const today = dayjs().tz(config.business.timezone).format('YYYY-MM-DD');
+  if (oldBooking.dateStr <= today) throw new Error('当日の予約はWEBから変更できません。店舗へご連絡ください。');
+
+  const store = getStore(input.storeId);
+  const staff = findStaff(input.staffId);
+  const info = await bootstrap(userId, bookingId);
+  if (!store || !staff) throw new Error('店舗またはトレーナーが見つかりません。');
+  const current = await availability(userId, input.storeId, input.dateStr, info, bookingId);
+  const row = current.staff.find((s) => s.id === input.staffId);
+  const slot = row?.slots.find((s) => s.start === input.startTime && s.end === input.endTime);
+  if (!slot) throw new Error('選択中にこの時間が埋まりました。別の時間を選んでください。');
+  const duration = info.durationMinutes;
+  if (await ticketStore.isTicketCustomer(userId)) {
+    const balance = await ticketStore.getBalance(userId, duration);
+    if (await bookingStore.getOutstandingCount(userId, duration, bookingId) >= balance) throw new Error('チケット残数を超える予約はできません。');
+  }
+  if (await isMember(userId)) {
+    const quota = await memberStore.getMonthlyQuota(userId);
+    if (await bookingStore.getMonthlyBookingCount(userId, input.dateStr.slice(0, 7), bookingId) >= quota) throw new Error(`月の予約上限（${quota}回）に達しています。`);
+  }
+
+  const event = await createBooking({
+    dateStr: input.dateStr, startTime: input.startTime, endTime: input.endTime, calendarId: staff.calendarId,
+    summary: `${info.customer.name}様`,
+    description: `Web予約画面からの自動登録(変更)\nお名前: ${info.customer.name}様\n店舗: ${store.name}`,
+  });
+  try { await deleteBooking(oldBooking.calendarId, oldBooking.eventId); }
+  catch (error) { console.error('Web変更時の旧カレンダー予約削除でエラー:', error); }
+  await bookingStore.cancelBooking(bookingId);
+  const newBooking = {
+    userId, storeId: store.id, storeName: store.name, staffId: staff.id, staffName: staff.name,
+    calendarId: staff.calendarId, eventId: event.id, dateStr: input.dateStr,
+    startTime: input.startTime, endTime: input.endTime, durationMinutes: duration, customerName: info.customer.name,
+  };
+  newBooking.bookingId = await bookingStore.addBooking(newBooking);
+  return { oldBooking, newBooking };
+}
+
+module.exports = { bootstrap, availability, weekAvailability, book, change };

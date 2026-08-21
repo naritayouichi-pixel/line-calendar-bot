@@ -394,7 +394,7 @@ function buildBookingConfirmedMessage(storeName, staffName, dateStr, startTime, 
  * bookings: [{ bookingId, storeName, staffName, dateStr, startTime, endTime }, ...]
  * todayStr: "YYYY-MM-DD" (当日の予約は変更・キャンセル不可のため、ボタンを出さない)
  */
-function buildBookingListMessage(bookings, todayStr) {
+function buildBookingListMessage(bookings, todayStr, webChangeBaseUrl = null) {
   if (bookings.length === 0) {
     return {
       type: 'text',
@@ -466,12 +466,14 @@ function buildBookingListMessage(bookings, todayStr) {
                   {
                     type: 'button',
                     style: 'secondary',
-                    action: {
-                      type: 'postback',
-                      label: '変更する',
-                      data: `action=start_change&bookingId=${b.bookingId}`,
-                      displayText: 'この予約を変更する',
-                    },
+                    action: webChangeBaseUrl
+                      ? { type: 'uri', label: '変更する', uri: `${webChangeBaseUrl}${encodeURIComponent(b.bookingId)}` }
+                      : {
+                          type: 'postback',
+                          label: '変更する',
+                          data: `action=start_change&bookingId=${b.bookingId}`,
+                          displayText: 'この予約を変更する',
+                        },
                   },
                   {
                     type: 'button',

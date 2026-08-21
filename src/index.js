@@ -119,7 +119,7 @@ function webBookingUser(req, res) {
 
 app.get('/api/web-booking/bootstrap', async (req, res) => {
   const userId = webBookingUser(req, res); if (!userId) return;
-  try { res.json(await webBookingService.bootstrap(userId)); }
+  try { res.json(await webBookingService.bootstrap(userId, req.query.changeBookingId || null)); }
   catch (error) { res.status(400).json({ error: error.message }); }
 });
 
@@ -145,13 +145,13 @@ app.post('/tasks/cleanup-trial-holds', async(req,res)=>{
 
 app.get('/api/web-booking/availability', async (req, res) => {
   const userId = webBookingUser(req, res); if (!userId) return;
-  try { res.json(await webBookingService.availability(userId, req.query.storeId, req.query.date)); }
+  try { res.json(await webBookingService.availability(userId, req.query.storeId, req.query.date, null, req.query.changeBookingId || null)); }
   catch (error) { console.error('Web空き枠取得でエラー:', error); res.status(400).json({ error: error.message }); }
 });
 
 app.get('/api/web-booking/week-availability', async (req, res) => {
   const userId = webBookingUser(req, res); if (!userId) return;
-  try { res.json(await webBookingService.weekAvailability(userId, req.query.storeId, req.query.start)); }
+  try { res.json(await webBookingService.weekAvailability(userId, req.query.storeId, req.query.start, req.query.changeBookingId || null)); }
   catch (error) { console.error('Web週間空き枠取得でエラー:', error); res.status(400).json({ error: error.message }); }
 });
 
@@ -170,6 +170,28 @@ app.post('/api/web-booking/book', express.json(), async (req, res) => {
     }
   } catch (error) {
     console.error('Web予約登録でエラー:', error);
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/web-booking/change', express.json(), async (req, res) => {
+  const userId = webBookingUser(req, res); if (!userId) return;
+  try {
+    const result = await webBookingService.change(userId, req.query.changeBookingId, req.body || {});
+    res.json(result);
+    try {
+      await client.pushMessage({
+        to: userId,
+        messages: [buildChangeConfirmedMessage(result.oldBooking, result.newBooking)],
+      });
+    } catch (pushError) {
+      console.error('Web予約変更の完了通知でエラー:', pushError);
+    }
+    if (isTomorrow(result.oldBooking.dateStr) || isTomorrow(result.newBooking.dateStr)) {
+      await notifyStaff(config.adminNotificationGroupId, '会社グループ', buildStaffChangeNotificationMessage(result.oldBooking, result.newBooking));
+    }
+  } catch (error) {
+    console.error('Web予約変更でエラー:', error);
     res.status(400).json({ error: error.message });
   }
 });
@@ -387,7 +409,9 @@ async function showBookingList(event, userId, requestedPage = 0) {
   const lastPage = Math.max(0, Math.ceil(bookings.length / pageSize) - 1);
   const page = Math.min(Math.max(0, Number(requestedPage) || 0), lastPage);
   const pageBookings = bookings.slice(page * pageSize, (page + 1) * pageSize);
-  const messages = [buildBookingListMessage(pageBookings, todayStr())];
+  const token = createWebBookingToken(userId, 60 * 60);
+  const webChangeBaseUrl = `${config.publicBaseUrl}/booking/?token=${encodeURIComponent(token)}&changeBookingId=`;
+  const messages = [buildBookingListMessage(pageBookings, todayStr(), webChangeBaseUrl)];
   if (bookings.length > pageSize) {
     const items = [];
     if (page > 0) {
