@@ -1,10 +1,11 @@
 const db = require('./firestore');
+const pairStore = require('./pairStore');
 const collection = db.collection('tickets');
 const TICKET_DURATIONS = [45, 60];
 const TICKET_PACKAGE_COUNTS = [1, 5, 10];
 
 async function get(userId) {
-  const snapshot = await collection.doc(userId).get();
+  const snapshot = await collection.doc(await pairStore.canonicalUserId(userId)).get();
   return snapshot.exists ? snapshot.data() : null;
 }
 async function isTicketCustomer(userId) { return Boolean(await get(userId)); }
@@ -16,7 +17,7 @@ async function getBalances(userId) {
 async function getName(userId) { return (await get(userId))?.name || null; }
 
 async function addTickets(userId, name, duration, count) {
-  const ref = collection.doc(userId);
+  const ref = collection.doc(await pairStore.canonicalUserId(userId));
   return db.runTransaction(async (tx) => {
     const snapshot = await tx.get(ref);
     const old = snapshot.exists ? snapshot.data() : {};
@@ -28,7 +29,7 @@ async function addTickets(userId, name, duration, count) {
 }
 
 async function decrementTicket(userId, duration) {
-  const ref = collection.doc(userId);
+  const ref = collection.doc(await pairStore.canonicalUserId(userId));
   return db.runTransaction(async (tx) => {
     const snapshot = await tx.get(ref);
     if (!snapshot.exists) return 0;
@@ -41,7 +42,7 @@ async function decrementTicket(userId, duration) {
 }
 
 async function registerAsTicketCustomer(userId, name) {
-  const ref = collection.doc(userId);
+  const ref = collection.doc(await pairStore.canonicalUserId(userId));
   await db.runTransaction(async (tx) => {
     const snapshot = await tx.get(ref);
     const old = snapshot.exists ? snapshot.data() : {};
@@ -58,6 +59,9 @@ async function registerAsTicketCustomer(userId, name) {
  */
 async function consumeForDueBooking(bookingId, dateStr, timeStr) {
   const bookingRef = db.collection('bookings').doc(bookingId);
+  const initialBooking = await bookingRef.get();
+  if (!initialBooking.exists) return null;
+  const ticketOwnerId = await pairStore.canonicalUserId(initialBooking.data().userId);
   return db.runTransaction(async (tx) => {
     const bookingSnapshot = await tx.get(bookingRef);
     if (!bookingSnapshot.exists) return null;
@@ -69,7 +73,7 @@ async function consumeForDueBooking(bookingId, dateStr, timeStr) {
       booking.startTime > timeStr
     ) return null;
 
-    const ticketRef = collection.doc(booking.userId);
+    const ticketRef = collection.doc(ticketOwnerId);
     const ticketSnapshot = await tx.get(ticketRef);
     if (!ticketSnapshot.exists) return null;
 

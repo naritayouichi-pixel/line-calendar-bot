@@ -11,7 +11,7 @@ const platinum = require('../src/platinumMembers');
 const { getSeasonalGreeting } = require('../src/seasonalGreeting');
 const { isMonthlyBookingReleased, monthlyBookingMaxDate, bookingCalendarMaxDate } = require('../src/bookingRelease');
 const { createWebBookingToken, verifyWebBookingToken } = require('../src/webBookingToken');
-const { normalizeCustomerName, isPairCustomerName } = require('../src/customerStore');
+const { normalizeCustomerName, isPairCustomerName, pairLinkKey } = require('../src/customerStore');
 
 test('required configuration and staff IDs are valid', () => {
   assert.ok(config.line.channelAccessToken);
@@ -106,6 +106,8 @@ test('customer linking rejects pasted documents instead of names', () => {
 test('pair recognition only accepts pair as the customer-name suffix', () => {
   assert.equal(isPairCustomerName('山田太郎 ペア'), true);
   assert.equal(isPairCustomerName('ペア予約についての長い文章'), false);
+  assert.equal(pairLinkKey('三島 塩見 ペア'), '三島塩見ペア');
+  assert.equal(pairLinkKey('三島塩見'), null);
 });
 
 test('bookable slots do not overlap a busy gap', () => {
@@ -178,7 +180,7 @@ test('HTTP health, webhook, and ticket automation routes are registered', () => 
 });
 
 test('Firestore stores expose asynchronous persistence APIs', () => {
-  for (const name of ['bookingStore', 'ticketStore', 'memberStore', 'customerStore', 'platinumMemberStore', 'reservationReminderStore', 'trialBookingStore']) {
+  for (const name of ['bookingStore', 'ticketStore', 'memberStore', 'customerStore', 'pairStore', 'platinumMemberStore', 'reservationReminderStore', 'trialBookingStore']) {
     const store = require(`../src/${name}`);
     assert.ok(Object.values(store).some((value) => typeof value === 'function'));
   }

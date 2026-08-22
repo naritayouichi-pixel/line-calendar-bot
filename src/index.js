@@ -20,6 +20,7 @@ const memberStore = require('./memberStore');
 const customerStore = require('./customerStore');
 const { isPlatinumMemberName } = require('./platinumMembers');
 const platinumMemberStore = require('./platinumMemberStore');
+const pairStore = require('./pairStore');
 const reservationReminderStore = require('./reservationReminderStore');
 const { getSeasonalGreeting } = require('./seasonalGreeting');
 const { isMonthlyBookingReleased, monthlyBookingMaxDate, bookingCalendarMaxDate } = require('./bookingRelease');
@@ -75,6 +76,11 @@ const lineConfig = {
 const client = new line.messagingApi.MessagingApiClient({
   channelAccessToken: lineConfig.channelAccessToken,
 });
+
+async function pushToCustomerAccount(userId, messages) {
+  const userIds = await pairStore.getMemberIds(userId);
+  await Promise.all(userIds.map((to) => client.pushMessage({ to, messages })));
+}
 
 const app = express();
 app.use('/assets', express.static(path.join(__dirname, '..', 'public')));
@@ -161,10 +167,7 @@ app.post('/api/web-booking/book', express.json(), async (req, res) => {
     const result = await webBookingService.book(userId, req.body || {});
     res.json(result);
     try {
-      await client.pushMessage({
-        to: userId,
-        messages: [buildBookingConfirmedMessage(result.storeName, result.staffName, result.dateStr, result.startTime, result.endTime, result.customerName)],
-      });
+      await pushToCustomerAccount(userId, [buildBookingConfirmedMessage(result.storeName, result.staffName, result.dateStr, result.startTime, result.endTime, result.customerName)]);
     } catch (pushError) {
       console.error('Web予約の完了通知でエラー:', pushError);
     }
@@ -180,10 +183,7 @@ app.post('/api/web-booking/change', express.json(), async (req, res) => {
     const result = await webBookingService.change(userId, req.query.changeBookingId, req.body || {});
     res.json(result);
     try {
-      await client.pushMessage({
-        to: userId,
-        messages: [buildChangeConfirmedMessage(result.oldBooking, result.newBooking)],
-      });
+      await pushToCustomerAccount(userId, [buildChangeConfirmedMessage(result.oldBooking, result.newBooking)]);
     } catch (pushError) {
       console.error('Web予約変更の完了通知でエラー:', pushError);
     }
@@ -346,6 +346,7 @@ async function isPlatinumMember(userId) {
   const configuredMember = config.members.find((member) => member.lineUserId === userId);
   const names = [
     configuredMember?.name,
+    await pairStore.getName(userId),
     await customerStore.getName(userId),
     await memberStore.getName(userId),
     ...await bookingStore.getDistinctCustomerNames(userId),
@@ -493,6 +494,7 @@ async function memberBookingReleaseLabel(userId) {
 async function syncExternalBookings(userId) {
   const names = [...new Set([
     ...await bookingStore.getDistinctCustomerNames(userId),
+    await pairStore.getName(userId),
     await customerStore.getName(userId),
   ].filter(Boolean))];
   if (names.length === 0) return; // 照合できるお名前がまだない
@@ -540,6 +542,10 @@ async function syncExternalBookings(userId) {
 async function getBookingsWithSync(userId) {
   await syncExternalBookings(userId);
   return bookingStore.getBookingsByUser(userId);
+}
+
+async function canAccessBooking(userId, booking) {
+  return Boolean(booking && await pairStore.sameAccount(userId, booking.userId));
 }
 
 // リッチメニューの「予約」ボタンから送られてくる文字列。
@@ -1453,7 +1459,7 @@ async function finalizeBooking(event, userId, customerName) {
 
 async function handleStartChange(event, data) {
   const booking = await bookingStore.getBooking(data.bookingId);
-  if (!booking || booking.status !== 'confirmed') {
+  if (!booking || !await canAccessBooking(event.source.userId, booking) || booking.status !== 'confirmed') {
     return replyText(event, 'この予約は見つかりませんでした。「予約確認」からやり直してください。');
   }
   if (booking.dateStr <= todayStr()) {
@@ -1471,7 +1477,7 @@ async function handleStartChange(event, data) {
 
 async function finalizeChange(event, oldBookingId, newDetails) {
   const oldBooking = await bookingStore.getBooking(oldBookingId);
-  if (!oldBooking || oldBooking.status !== 'confirmed') {
+  if (!oldBooking || !await canAccessBooking(event.source.userId, oldBooking) || oldBooking.status !== 'confirmed') {
     return replyText(event, '変更元の予約が見つかりませんでした。「予約確認」からやり直してください。');
   }
   if (oldBooking.dateStr <= todayStr()) {
@@ -1585,7 +1591,7 @@ async function finalizeChange(event, oldBookingId, newDetails) {
 
 async function handleStartCancel(event, data) {
   const booking = await bookingStore.getBooking(data.bookingId);
-  if (!booking || booking.status !== 'confirmed') {
+  if (!booking || !await canAccessBooking(event.source.userId, booking) || booking.status !== 'confirmed') {
     return replyText(event, 'この予約は見つかりませんでした。「予約確認」からやり直してください。');
   }
   if (booking.dateStr <= todayStr()) {
@@ -1600,7 +1606,7 @@ async function handleStartCancel(event, data) {
 
 async function handleConfirmCancel(event, data) {
   const booking = await bookingStore.getBooking(data.bookingId);
-  if (!booking || booking.status !== 'confirmed') {
+  if (!booking || !await canAccessBooking(event.source.userId, booking) || booking.status !== 'confirmed') {
     return replyText(event, 'この予約はすでにキャンセルされているか、見つかりませんでした。');
   }
   if (booking.dateStr <= todayStr()) {

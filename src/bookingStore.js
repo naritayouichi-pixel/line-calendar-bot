@@ -1,4 +1,5 @@
 const db = require('./firestore');
+const pairStore = require('./pairStore');
 const collection = db.collection('bookings');
 
 async function addBooking(record) {
@@ -11,8 +12,7 @@ async function getBooking(id) {
   return snapshot.exists ? snapshot.data() : null;
 }
 async function getBookingsByUser(userId) {
-  const snapshot = await collection.where('userId', '==', userId).get();
-  return snapshot.docs.map((doc) => doc.data()).filter((b) => b.status === 'confirmed');
+  return (await userRecords(userId)).filter((b) => b.status === 'confirmed');
 }
 async function updateBooking(id, patch) {
   const ref = collection.doc(id);
@@ -26,8 +26,10 @@ async function updateBooking(id, patch) {
 async function cancelBooking(id) { return updateBooking(id, { status: 'cancelled' }); }
 async function markAttended(id) { return updateBooking(id, { attended: true }); }
 async function userRecords(userId) {
-  const snapshot = await collection.where('userId', '==', userId).get();
-  return snapshot.docs.map((doc) => doc.data());
+  const userIds = await pairStore.getMemberIds(userId);
+  const snapshots = await Promise.all(userIds.map((id) => collection.where('userId', '==', id).get()));
+  const records = snapshots.flatMap((snapshot) => snapshot.docs.map((doc) => doc.data()));
+  return [...new Map(records.map((record) => [record.bookingId, record])).values()];
 }
 async function getOutstandingCount(userId, duration = null, excludeId = null) {
   return (await userRecords(userId)).filter((b) => b.status === 'confirmed' && !b.attended && b.bookingId !== excludeId && (duration === null || b.durationMinutes === duration)).length;

@@ -7,6 +7,7 @@ const customerStore = require('./customerStore');
 const memberStore = require('./memberStore');
 const ticketStore = require('./ticketStore');
 const platinumMemberStore = require('./platinumMemberStore');
+const pairStore = require('./pairStore');
 const { isPlatinumMemberName } = require('./platinumMembers');
 const { monthlyBookingMaxDate, bookingCalendarMaxDate } = require('./bookingRelease');
 const { normalizeCustomerName } = require('./customerStore');
@@ -21,7 +22,7 @@ async function isMember(userId) {
 }
 async function isPlatinum(userId) {
   const configured = config.members.find((m) => m.lineUserId === userId)?.name;
-  const names = [configured, await customerStore.getName(userId), await memberStore.getName(userId), ...await bookingStore.getDistinctCustomerNames(userId)].filter(Boolean);
+  const names = [configured, await pairStore.getName(userId), await customerStore.getName(userId), await memberStore.getName(userId), ...await bookingStore.getDistinctCustomerNames(userId)].filter(Boolean);
   for (const name of names) {
     const status = await platinumMemberStore.getStatus(name);
     if (status !== null) return status;
@@ -45,7 +46,7 @@ async function durationFor(userId) {
   return await memberStore.getSessionDuration(userId) || config.booking.durationMinutes;
 }
 async function bootstrap(userId, changeBookingId = null) {
-  const name = await customerStore.getName(userId);
+  const name = await pairStore.getName(userId) || await customerStore.getName(userId);
   if (!name) throw new Error('先にLINEメニューの「会員種別・紐付け」から、お名前を登録してください。');
   try { normalizeCustomerName(name); }
   catch { throw new Error('顧客名が正しくありません。LINEメニューの「会員種別・紐付け」からフルネームを再登録してください。'); }
@@ -75,7 +76,7 @@ async function bootstrap(userId, changeBookingId = null) {
   let changeBooking = null;
   if (changeBookingId) {
     changeBooking = await bookingStore.getBooking(changeBookingId);
-    if (!changeBooking || changeBooking.userId !== userId || changeBooking.status !== 'confirmed') throw new Error('変更する予約が見つかりません。');
+    if (!changeBooking || !await pairStore.sameAccount(changeBooking.userId, userId) || changeBooking.status !== 'confirmed') throw new Error('変更する予約が見つかりません。');
     if (changeBooking.dateStr <= dayjs().tz(config.business.timezone).format('YYYY-MM-DD')) throw new Error('当日の予約はWEBから変更できません。店舗へご連絡ください。');
   }
   return {
@@ -180,7 +181,7 @@ async function book(userId, input) {
 async function change(userId, bookingId, input) {
   if (!bookingId) throw new Error('変更する予約が指定されていません。');
   const oldBooking = await bookingStore.getBooking(bookingId);
-  if (!oldBooking || oldBooking.userId !== userId || oldBooking.status !== 'confirmed') throw new Error('変更する予約が見つかりません。');
+  if (!oldBooking || !await pairStore.sameAccount(oldBooking.userId, userId) || oldBooking.status !== 'confirmed') throw new Error('変更する予約が見つかりません。');
   const today = dayjs().tz(config.business.timezone).format('YYYY-MM-DD');
   if (oldBooking.dateStr <= today) throw new Error('当日の予約はWEBから変更できません。店舗へご連絡ください。');
 
