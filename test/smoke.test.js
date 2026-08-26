@@ -6,7 +6,7 @@ const config = require('../src/config');
 const calendar = require('../src/calendarService');
 const shifts = require('../src/shiftSchedule');
 const messages = require('../src/lineService');
-const { app } = require('../src/index');
+const { app, isCustomerLinkPendingActive } = require('../src/index');
 const platinum = require('../src/platinumMembers');
 const { getSeasonalGreeting } = require('../src/seasonalGreeting');
 const { isMonthlyBookingReleased, monthlyBookingMaxDate, bookingCalendarMaxDate } = require('../src/bookingRelease');
@@ -101,6 +101,11 @@ test('customer linking rejects pasted documents instead of names', () => {
   assert.equal(normalizeCustomerName('山田 太郎様'), '山田 太郎');
   assert.throws(() => normalizeCustomerName('議事録\n長い本文'), /フルネーム/);
   assert.throws(() => normalizeCustomerName('あ'.repeat(41)), /フルネーム/);
+});
+
+test('customer-link name input expires after ten minutes', () => {
+  assert.equal(isCustomerLinkPendingActive({ createdAt: Date.now() - 9 * 60 * 1000 }), true);
+  assert.equal(isCustomerLinkPendingActive({ createdAt: Date.now() - 11 * 60 * 1000 }), false);
 });
 
 test('pair recognition only accepts pair as the customer-name suffix', () => {

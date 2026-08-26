@@ -110,6 +110,11 @@ const pendingCustomerLinkAdmin = new Map();
 
 // お客様自身がLINEユーザーIDとカレンダー上の名前を紐づける途中の状態。
 const pendingCustomerLinkSelf = new Map();
+const CUSTOMER_LINK_PENDING_MS = 10 * 60 * 1000;
+
+function isCustomerLinkPendingActive(state) {
+  return Boolean(state?.createdAt && Date.now() - state.createdAt < CUSTOMER_LINK_PENDING_MS);
+}
 
 // ヘルスチェック用(Cloud Run等のデプロイ確認に使う)
 app.get('/', (req, res) => res.send('LINE calendar bot is running'));
@@ -639,18 +644,23 @@ async function handleTextMessage(event) {
 
     // 「会員種別 > 顧客紐付け」からフルネームの入力待ちであれば登録する
     if (userId && pendingCustomerLinkSelf.has(userId)) {
-      const name = text.replace(/様$/, '').trim();
-      if (!name) return replyText(event, 'フルネームを入力してください。');
-      try {
-        await customerStore.linkCustomer(userId, name);
-      } catch (error) {
-        return replyText(event, error.message);
+      const state = pendingCustomerLinkSelf.get(userId);
+      if (!isCustomerLinkPendingActive(state)) {
+        pendingCustomerLinkSelf.delete(userId);
+      } else {
+        const name = text.replace(/様$/, '').trim();
+        if (!name) return replyText(event, 'フルネームを入力してください。');
+        try {
+          await customerStore.linkCustomer(userId, name);
+        } catch (error) {
+          return replyText(event, error.message);
+        }
+        pendingCustomerLinkSelf.delete(userId);
+        return replyText(
+          event,
+          `${name}様として顧客情報を紐付けました。`
+        );
       }
-      pendingCustomerLinkSelf.delete(userId);
-      return replyText(
-        event,
-        `${name}様として顧客情報を紐付けました。`
-      );
     }
 
     // 管理者がチケット追加の対話中であれば、そちらを優先する
@@ -1014,14 +1024,14 @@ async function handlePostback(event) {
   // 会員種別メニューから、お客様自身のIDとカレンダー上の名前を紐づける
   if (data.action === 'link_customer_self') {
     const userId = event.source.userId;
-    pendingCustomerLinkSelf.set(userId, { step: 'awaiting_name' });
+    pendingCustomerLinkSelf.set(userId, { step: 'awaiting_name', createdAt: Date.now() });
     return client.replyMessage({
       replyToken: event.replyToken,
       messages: [
         { type: 'text', text: userId },
         {
           type: 'text',
-          text: 'フルネームを入力してください。\nお二人でご利用の場合は、名前の最後に「ペア」を付けてください。\n例: 山田 太郎 ペア',
+          text: '10分以内にフルネームを入力してください。\nお二人でご利用の場合は、名前の最後に「ペア」を付けてください。\n例: 山田 太郎 ペア',
         },
       ],
     });
@@ -1730,4 +1740,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app };
+module.exports = { app, isCustomerLinkPendingActive };
