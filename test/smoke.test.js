@@ -50,6 +50,15 @@ test('direct calendar bookings resolve the store using the appointment time', ()
   assert.equal(shifts.getStoreForStaffAtTime('furuya', '2026-09-20', '18:00').id, 'motosumiyoshi');
 });
 
+test('pair bookings on a staff calendar only block the store where that staff is working', () => {
+  const furuya = config.staff.find((staff) => staff.id === 'furuya');
+  const morningEvent = { start: { dateTime: '2026-09-20T09:00:00+09:00' } };
+  const eveningEvent = { start: { dateTime: '2026-09-20T18:00:00+09:00' } };
+  assert.equal(calendar.pairEventBelongsToStore(furuya.calendarId, morningEvent, 'jiyugaoka'), true);
+  assert.equal(calendar.pairEventBelongsToStore(furuya.calendarId, morningEvent, 'motosumiyoshi'), false);
+  assert.equal(calendar.pairEventBelongsToStore(furuya.calendarId, eveningEvent, 'motosumiyoshi'), true);
+});
+
 test('platinum members are recognized despite honorifics, spaces, or pair suffix', () => {
   assert.equal(platinum.PLATINUM_MEMBER_NAMES.length, 32);
   assert.equal(platinum.isPlatinumMemberName('吉原 教一郎様'), true);

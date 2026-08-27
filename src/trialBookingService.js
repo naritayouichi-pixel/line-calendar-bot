@@ -52,7 +52,7 @@ async function availability(storeId, dateStr) {
     const person = staff(group.staffId); if (!person || await hasFullDayBlock(person.calendarId,dateStr,config.booking.fullDayBlockKeyword)) continue;
     let slots=[];
     for (const block of group.blocks) {
-      const free=await getAvailableSlots(dateStr,person.calendarId,block.start,block.end,{ allCalendarIds:[person.calendarId], pairCalendarIds:ids });
+      const free=await getAvailableSlots(dateStr,person.calendarId,block.start,block.end,{ allCalendarIds:[person.calendarId], pairCalendarIds:ids, targetStoreId:storeId });
       slots.push(...getBookableStartTimes(free,60));
     }
     rows.push({ id:person.id,name:person.name,photoUrl:STAFF_PHOTOS[person.id]||null,slots:[...new Map(slots.map((s)=>[s.start.format('HH:mm'),{start:s.start.format('HH:mm'),end:s.end.format('HH:mm')}])).values()] });

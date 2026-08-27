@@ -14,8 +14,17 @@ const { normalizeCustomerName } = require('./customerStore');
 
 function findStaff(id) { return config.staff.find((staff) => staff.id === id); }
 function pairName(name) { return customerStore.isPairCustomerName(name); }
-function storeCalendarIds(storeId, dateStr) {
-  return [...new Set(getShiftsForDate(storeId, dateStr).shifts.map((s) => findStaff(s.staffId)?.calendarId).filter(Boolean))];
+function minutes(value, fallback) {
+  const [hour, minute] = String(value || fallback).split(':').map(Number);
+  return hour * 60 + minute;
+}
+function storeCalendarIds(storeId, dateStr, start = null, end = null) {
+  const shifts = getShiftsForDate(storeId, dateStr).shifts.filter((shift) => {
+    if (!start || !end) return true;
+    return minutes(shift.start, `${config.business.startHour}:00`) < minutes(end)
+      && minutes(shift.end, `${config.business.endHour}:00`) > minutes(start);
+  });
+  return [...new Set(shifts.map((s) => findStaff(s.staffId)?.calendarId).filter(Boolean))];
 }
 async function isMember(userId) {
   return config.members.some((m) => m.lineUserId === userId) || memberStore.isMember(userId);
@@ -117,7 +126,9 @@ async function availability(userId, storeId, dateStr, suppliedInfo = null, chang
     let slots = [];
     for (const block of group.blocks) {
       const free = await getAvailableSlots(dateStr, staff.calendarId, block.start, block.end,
-        pairName(customerName) ? { allCalendarIds: calendars } : { allCalendarIds: [staff.calendarId], pairCalendarIds: calendars });
+        pairName(customerName)
+          ? { allCalendarIds: storeCalendarIds(storeId, dateStr, block.start, block.end) }
+          : { allCalendarIds: [staff.calendarId], pairCalendarIds: calendars, targetStoreId: storeId });
       slots.push(...getBookableStartTimes(free, info.durationMinutes));
     }
     const unique = [...new Map(slots.map((s) => [s.start.format('HH:mm'), { start: s.start.format('HH:mm'), end: s.end.format('HH:mm') }])).values()];

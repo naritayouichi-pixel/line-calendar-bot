@@ -337,9 +337,18 @@ function isPairBookingName(name) {
   return customerStore.isPairCustomerName(name);
 }
 
-function getStoreCalendarIds(storeId, dateStr) {
+function getStoreCalendarIds(storeId, dateStr, startTime = null, endTime = null) {
   const { shifts } = getShiftsForDate(storeId, dateStr);
-  return [...new Set(shifts.map((s) => findStaff(s.staffId)?.calendarId).filter(Boolean))];
+  const toMinutes = (value, fallback) => {
+    const [hour, minute] = String(value || fallback).split(':').map(Number);
+    return hour * 60 + minute;
+  };
+  const matching = shifts.filter((shift) => {
+    if (!startTime || !endTime) return true;
+    return toMinutes(shift.start, `${config.business.startHour}:00`) < toMinutes(endTime)
+      && toMinutes(shift.end, `${config.business.endHour}:00`) > toMinutes(startTime);
+  });
+  return [...new Set(matching.map((s) => findStaff(s.staffId)?.calendarId).filter(Boolean))];
 }
 
 async function isMember(userId) {
@@ -1188,7 +1197,8 @@ async function handlePickDate(event, data) {
 async function computeBookableSlots(calendarId, dateStr, blocks, durationMinutes, calendarOptions = {}) {
   let bookableSlots = [];
   for (const block of blocks) {
-    const freeSlots = await getAvailableSlots(dateStr, calendarId, block.start, block.end, calendarOptions);
+    const options = typeof calendarOptions === 'function' ? calendarOptions(block) : calendarOptions;
+    const freeSlots = await getAvailableSlots(dateStr, calendarId, block.start, block.end, options);
     bookableSlots = bookableSlots.concat(getBookableStartTimes(freeSlots, durationMinutes));
   }
   bookableSlots.sort((a, b) => a.start.valueOf() - b.start.valueOf());
@@ -1257,8 +1267,8 @@ async function handleSelectStaff(event, data) {
     blocks,
     durationMinutes,
     pairBooking
-      ? { allCalendarIds: storeCalendarIds }
-      : { allCalendarIds: [staff.calendarId], pairCalendarIds: storeCalendarIds }
+      ? (block) => ({ allCalendarIds: getStoreCalendarIds(store.id, dateStr, block.start, block.end) })
+      : { allCalendarIds: [staff.calendarId], pairCalendarIds: storeCalendarIds, targetStoreId: store.id }
   );
 
   return client.replyMessage({
@@ -1365,10 +1375,11 @@ async function finalizeBooking(event, userId, customerName) {
     booking.startTime,
     booking.endTime,
     isPairBookingName(customerName)
-      ? { allCalendarIds: getStoreCalendarIds(booking.storeId, booking.dateStr) }
+      ? { allCalendarIds: getStoreCalendarIds(booking.storeId, booking.dateStr, booking.startTime, booking.endTime) }
       : {
           allCalendarIds: [booking.calendarId],
           pairCalendarIds: getStoreCalendarIds(booking.storeId, booking.dateStr),
+          targetStoreId: booking.storeId,
         }
   );
   if (!finalFree.some((slot) => slot.end.diff(slot.start, 'minute') >= durationMinutes)) {
@@ -1532,10 +1543,11 @@ async function finalizeChange(event, oldBookingId, newDetails) {
     newDetails.startTime,
     newDetails.endTime,
     isPairBookingName(customerName)
-      ? { allCalendarIds: getStoreCalendarIds(newDetails.storeId, newDetails.dateStr) }
+      ? { allCalendarIds: getStoreCalendarIds(newDetails.storeId, newDetails.dateStr, newDetails.startTime, newDetails.endTime) }
       : {
           allCalendarIds: [newDetails.calendarId],
           pairCalendarIds: getStoreCalendarIds(newDetails.storeId, newDetails.dateStr),
+          targetStoreId: newDetails.storeId,
         }
   );
   if (!changeFree.some((slot) => slot.end.diff(slot.start, 'minute') >= newDurationMinutes)) {

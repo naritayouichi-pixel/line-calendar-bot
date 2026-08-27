@@ -3,9 +3,20 @@ const dayjs = require('dayjs');
 const utc = require('dayjs/plugin/utc');
 const timezone = require('dayjs/plugin/timezone');
 const config = require('./config');
+const { getStoreForStaffAtTime } = require('./shiftSchedule');
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
+
+function pairEventBelongsToStore(calendarId, event, targetStoreId) {
+  if (!targetStoreId) return true;
+  if (!event?.start?.dateTime) return false;
+  const staff = config.staff.find((item) => item.calendarId === calendarId);
+  if (!staff) return false;
+  const start = dayjs(event.start.dateTime).tz(config.business.timezone);
+  const store = getStoreForStaffAtTime(staff.id, start.format('YYYY-MM-DD'), start.format('HH:mm'));
+  return store?.id === targetStoreId;
+}
 
 /**
  * サービスアカウントの認証情報からGoogle Calendar APIクライアントを作成する。
@@ -67,6 +78,8 @@ async function getAvailableSlots(dateStr, calendarId, shiftStart, shiftEnd, opti
     });
     for (const ev of events.data.items || []) {
       if (!(ev.summary || '').includes('ペア') || !ev.start?.dateTime || !ev.end?.dateTime) continue;
+      // 同じスタッフカレンダーに別店舗の予約があっても、対象店舗の枠は塞がない。
+      if (!pairEventBelongsToStore(id, ev, options.targetStoreId)) continue;
       busyRaw.push({ start: ev.start.dateTime, end: ev.end.dateTime });
     }
   }
@@ -256,4 +269,5 @@ module.exports = {
   deleteBooking,
   searchEventsByName,
   hasFullDayBlock,
+  pairEventBelongsToStore,
 };
