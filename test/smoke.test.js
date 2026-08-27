@@ -57,6 +57,12 @@ test('pair bookings on a staff calendar only block the store where that staff is
   assert.equal(calendar.pairEventBelongsToStore(furuya.calendarId, morningEvent, 'jiyugaoka'), true);
   assert.equal(calendar.pairEventBelongsToStore(furuya.calendarId, morningEvent, 'motosumiyoshi'), false);
   assert.equal(calendar.pairEventBelongsToStore(furuya.calendarId, eveningEvent, 'motosumiyoshi'), true);
+  const exceptionalEvent = {
+    start: { dateTime: '2026-09-06T17:00:00+09:00' },
+    description: '店舗: 自由が丘店',
+  };
+  assert.equal(calendar.pairEventBelongsToStore(furuya.calendarId, exceptionalEvent, 'jiyugaoka'), true);
+  assert.equal(calendar.pairEventBelongsToStore(furuya.calendarId, exceptionalEvent, 'motosumiyoshi'), false);
 });
 
 test('platinum members are recognized despite honorifics, spaces, or pair suffix', () => {

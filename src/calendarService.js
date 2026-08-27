@@ -11,6 +11,11 @@ dayjs.extend(timezone);
 function pairEventBelongsToStore(calendarId, event, targetStoreId) {
   if (!targetStoreId) return true;
   if (!event?.start?.dateTime) return false;
+  const explicitStore = [event.description, event.location]
+    .filter(Boolean)
+    .join('\n');
+  if (explicitStore.includes('自由が丘')) return targetStoreId === 'jiyugaoka';
+  if (explicitStore.includes('元住吉')) return targetStoreId === 'motosumiyoshi';
   const staff = config.staff.find((item) => item.calendarId === calendarId);
   if (!staff) return false;
   const start = dayjs(event.start.dateTime).tz(config.business.timezone);
