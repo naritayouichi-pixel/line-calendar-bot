@@ -1380,11 +1380,12 @@ async function finalizeBooking(event, userId, customerName) {
     booking.startTime,
     booking.endTime,
     isPairBookingName(customerName)
-      ? { allCalendarIds: getStoreCalendarIds(booking.storeId, booking.dateStr, booking.startTime, booking.endTime) }
+      ? { allCalendarIds: getStoreCalendarIds(booking.storeId, booking.dateStr, booking.startTime, booking.endTime), bypassCache: true }
       : {
           allCalendarIds: [booking.calendarId],
           pairCalendarIds: getStoreCalendarIds(booking.storeId, booking.dateStr),
           targetStoreId: booking.storeId,
+          bypassCache: true,
         }
   );
   if (!finalFree.some((slot) => slot.end.diff(slot.start, 'minute') >= durationMinutes)) {
@@ -1548,11 +1549,12 @@ async function finalizeChange(event, oldBookingId, newDetails) {
     newDetails.startTime,
     newDetails.endTime,
     isPairBookingName(customerName)
-      ? { allCalendarIds: getStoreCalendarIds(newDetails.storeId, newDetails.dateStr, newDetails.startTime, newDetails.endTime) }
+      ? { allCalendarIds: getStoreCalendarIds(newDetails.storeId, newDetails.dateStr, newDetails.startTime, newDetails.endTime), bypassCache: true }
       : {
           allCalendarIds: [newDetails.calendarId],
           pairCalendarIds: getStoreCalendarIds(newDetails.storeId, newDetails.dateStr),
           targetStoreId: newDetails.storeId,
+          bypassCache: true,
         }
   );
   if (!changeFree.some((slot) => slot.end.diff(slot.start, 'minute') >= newDurationMinutes)) {

@@ -1,7 +1,7 @@
 const dayjs = require('dayjs');
 const config = require('./config');
 const { STORES, STAFF_PHOTOS, getStore, getShiftsForDate, groupShiftsByStaff } = require('./shiftSchedule');
-const { getAvailableSlots, getBookableStartTimes, createBooking, deleteBooking, hasFullDayBlock } = require('./calendarService');
+const { getAvailableSlots, getBookableStartTimes, createBooking, deleteBooking, hasFullDayBlock, clearCalendarCache } = require('./calendarService');
 const bookingStore = require('./bookingStore');
 const customerStore = require('./customerStore');
 const memberStore = require('./memberStore');
@@ -11,6 +11,15 @@ const pairStore = require('./pairStore');
 const { isPlatinumMemberName } = require('./platinumMembers');
 const { monthlyBookingMaxDate, bookingCalendarMaxDate } = require('./bookingRelease');
 const { normalizeCustomerName } = require('./customerStore');
+
+const BOOTSTRAP_CACHE_MS = 15 * 1000;
+const bootstrapCache = new Map();
+
+function clearBootstrapCache(userId) {
+  for (const key of bootstrapCache.keys()) {
+    if (key.startsWith(`${userId}:`)) bootstrapCache.delete(key);
+  }
+}
 
 function findStaff(id) { return config.staff.find((staff) => staff.id === id); }
 function pairName(name) { return customerStore.isPairCustomerName(name); }
@@ -54,7 +63,7 @@ async function durationFor(userId) {
   }
   return await memberStore.getSessionDuration(userId) || config.booking.durationMinutes;
 }
-async function bootstrap(userId, changeBookingId = null) {
+async function buildBootstrap(userId, changeBookingId = null) {
   const name = await pairStore.getName(userId) || await customerStore.getName(userId);
   if (!name) throw new Error('先にLINEメニューの「会員種別・紐付け」から、お名前を登録してください。');
   try { normalizeCustomerName(name); }
@@ -110,6 +119,18 @@ async function bootstrap(userId, changeBookingId = null) {
     } : null,
   };
 }
+async function bootstrap(userId, changeBookingId = null) {
+  const key = `${userId}:${changeBookingId || ''}`;
+  const now = Date.now();
+  const existing = bootstrapCache.get(key);
+  if (existing && existing.expiresAt > now) return existing.promise;
+  const promise = buildBootstrap(userId, changeBookingId).catch((error) => {
+    bootstrapCache.delete(key);
+    throw error;
+  });
+  bootstrapCache.set(key, { promise, expiresAt: now + BOOTSTRAP_CACHE_MS });
+  return promise;
+}
 async function availability(userId, storeId, dateStr, suppliedInfo = null, changeBookingId = null) {
   const store = getStore(storeId);
   if (!store) throw new Error('店舗が見つかりません。');
@@ -163,6 +184,7 @@ async function book(userId, input) {
   const staff = findStaff(input.staffId);
   const info = await bootstrap(userId);
   if (!store || !staff) throw new Error('店舗またはトレーナーが見つかりません。');
+  clearCalendarCache();
   const current = await availability(userId, input.storeId, input.dateStr);
   const row = current.staff.find((s) => s.id === input.staffId);
   const slot = row?.slots.find((s) => s.start === input.startTime && s.end === input.endTime);
@@ -186,6 +208,7 @@ async function book(userId, input) {
     calendarId: staff.calendarId, eventId: event.id, dateStr: input.dateStr,
     startTime: input.startTime, endTime: input.endTime, durationMinutes: duration, customerName: info.customer.name,
   });
+  clearBootstrapCache(userId);
   return { bookingId, storeName: store.name, staffName: staff.name, customerName: info.customer.name, dateStr: input.dateStr, startTime: input.startTime, endTime: input.endTime };
 }
 
@@ -200,6 +223,7 @@ async function change(userId, bookingId, input) {
   const staff = findStaff(input.staffId);
   const info = await bootstrap(userId, bookingId);
   if (!store || !staff) throw new Error('店舗またはトレーナーが見つかりません。');
+  clearCalendarCache();
   const current = await availability(userId, input.storeId, input.dateStr, info, bookingId);
   const row = current.staff.find((s) => s.id === input.staffId);
   const slot = row?.slots.find((s) => s.start === input.startTime && s.end === input.endTime);
@@ -228,6 +252,7 @@ async function change(userId, bookingId, input) {
     startTime: input.startTime, endTime: input.endTime, durationMinutes: duration, customerName: info.customer.name,
   };
   newBooking.bookingId = await bookingStore.addBooking(newBooking);
+  clearBootstrapCache(userId);
   return { oldBooking, newBooking };
 }
 

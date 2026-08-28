@@ -8,10 +8,30 @@ const { getStoreForStaffAtTime } = require('./shiftSchedule');
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
+const CACHE_TTL_MS = 15 * 1000;
+const calendarCache = new Map();
+let sharedCalendarClient = null;
+
+function cached(key, loader, bypass = false) {
+  const now = Date.now();
+  const existing = calendarCache.get(key);
+  if (!bypass && existing && existing.expiresAt > now) return existing.promise;
+  const promise = Promise.resolve().then(loader).catch((error) => {
+    calendarCache.delete(key);
+    throw error;
+  });
+  calendarCache.set(key, { promise, expiresAt: now + CACHE_TTL_MS });
+  return promise;
+}
+
+function clearCalendarCache() {
+  calendarCache.clear();
+}
+
 function pairEventBelongsToStore(calendarId, event, targetStoreId) {
   if (!targetStoreId) return true;
   if (!event?.start?.dateTime) return false;
-  const explicitStore = [event.description, event.location]
+  const explicitStore = [event.summary, event.description, event.location]
     .filter(Boolean)
     .join('\n');
   if (explicitStore.includes('自由が丘')) return targetStoreId === 'jiyugaoka';
@@ -33,6 +53,7 @@ function pairEventBelongsToStore(calendarId, event, targetStoreId) {
  * 「予定の変更権限」以上にしてもらう必要がある(READMEを参照)。
  */
 function getCalendarClient() {
+  if (sharedCalendarClient) return sharedCalendarClient;
   const keyJson = JSON.parse(
     Buffer.from(config.google.serviceAccountKeyBase64, 'base64').toString('utf-8')
   );
@@ -42,7 +63,23 @@ function getCalendarClient() {
     scopes: ['https://www.googleapis.com/auth/calendar'],
   });
 
-  return google.calendar({ version: 'v3', auth });
+  sharedCalendarClient = google.calendar({ version: 'v3', auth });
+  return sharedCalendarClient;
+}
+
+async function getDayEvents(calendarId, dateStr, bypassCache = false) {
+  const tz = config.business.timezone;
+  const timeMin = dayjs.tz(`${dateStr} 00:00`, tz).toISOString();
+  const timeMax = dayjs.tz(`${dateStr} 00:00`, tz).add(1, 'day').toISOString();
+  return cached(`events:${calendarId}:${dateStr}`, async () => {
+    const res = await getCalendarClient().events.list({
+      calendarId,
+      timeMin,
+      timeMax,
+      singleEvents: true,
+    });
+    return res.data.items || [];
+  }, bypassCache);
 }
 
 /**
@@ -62,27 +99,26 @@ async function getAvailableSlots(dateStr, calendarId, shiftStart, shiftEnd, opti
 
   const allCalendarIds = [...new Set(options.allCalendarIds || [calendarId])];
   const pairCalendarIds = [...new Set(options.pairCalendarIds || [])];
-  const res = await calendar.freebusy.query({
+  const freeBusyKey = `freebusy:${dayStart.toISOString()}:${dayEnd.toISOString()}:${allCalendarIds.slice().sort().join(',')}`;
+  const res = await cached(freeBusyKey, () => calendar.freebusy.query({
     requestBody: {
       timeMin: dayStart.toISOString(),
       timeMax: dayEnd.toISOString(),
       timeZone: tz,
       items: allCalendarIds.map((id) => ({ id })),
     },
-  });
+  }), options.bypassCache);
 
   const busyRaw = allCalendarIds.flatMap((id) => res.data.calendars[id]?.busy || []);
 
   // 通常予約でも、同じ店舗の別スタッフに入っている「ペア」予定は店舗全体を塞ぐ。
   for (const id of pairCalendarIds) {
-    const events = await calendar.events.list({
-      calendarId: id,
-      timeMin: dayStart.toISOString(),
-      timeMax: dayEnd.toISOString(),
-      singleEvents: true,
-    });
-    for (const ev of events.data.items || []) {
+    const events = await getDayEvents(id, dateStr, options.bypassCache);
+    for (const ev of events) {
       if (!(ev.summary || '').includes('ペア') || !ev.start?.dateTime || !ev.end?.dateTime) continue;
+      const eventStart = dayjs(ev.start.dateTime).tz(tz);
+      const eventEnd = dayjs(ev.end.dateTime).tz(tz);
+      if (!eventStart.isBefore(dayEnd) || !eventEnd.isAfter(dayStart)) continue;
       // 同じスタッフカレンダーに別店舗の予約があっても、対象店舗の枠は塞がない。
       if (!pairEventBelongsToStore(id, ev, options.targetStoreId)) continue;
       busyRaw.push({ start: ev.start.dateTime, end: ev.end.dateTime });
@@ -181,13 +217,14 @@ async function createBooking({ dateStr, startTime, endTime, calendarId, summary,
       end: { dateTime: end.toISOString(), timeZone: tz },
     },
   });
-
+  clearCalendarCache();
   return res.data;
 }
 
 async function updateCalendarBooking(calendarId, eventId, patch) {
   const calendar = getCalendarClient();
   const res = await calendar.events.patch({ calendarId, eventId, requestBody: patch });
+  clearCalendarCache();
   return res.data;
 }
 
@@ -197,6 +234,7 @@ async function updateCalendarBooking(calendarId, eventId, patch) {
 async function deleteBooking(calendarId, eventId) {
   const calendar = getCalendarClient();
   await calendar.events.delete({ calendarId, eventId });
+  clearCalendarCache();
 }
 
 /**
@@ -247,19 +285,8 @@ async function searchEventsByName(calendarId, name, fromDateStr) {
  * その日の予約を丸ごと受け付けないようにするために使う。
  */
 async function hasFullDayBlock(calendarId, dateStr, keyword) {
-  const tz = config.business.timezone;
-  const timeMin = dayjs.tz(`${dateStr} 00:00`, tz).toISOString();
-  const timeMax = dayjs.tz(`${dateStr} 00:00`, tz).add(1, 'day').toISOString();
-  const calendar = getCalendarClient();
-
-  const res = await calendar.events.list({
-    calendarId,
-    timeMin,
-    timeMax,
-    singleEvents: true,
-  });
-
-  return (res.data.items || []).some((ev) => {
+  const events = await getDayEvents(calendarId, dateStr);
+  return events.some((ev) => {
     const isAllDay = ev.start && ev.start.date && !ev.start.dateTime; // 終日予定かどうか
     const titleMatches = (ev.summary || '').includes(keyword);
     return isAllDay && titleMatches;
@@ -275,4 +302,5 @@ module.exports = {
   searchEventsByName,
   hasFullDayBlock,
   pairEventBelongsToStore,
+  clearCalendarCache,
 };
