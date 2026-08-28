@@ -1,7 +1,7 @@
 const dayjs = require('dayjs');
 const config = require('./config');
 const { STORES, STAFF_PHOTOS, getStore, getShiftsForDate, groupShiftsByStaff } = require('./shiftSchedule');
-const { getAvailableSlots, getBookableStartTimes, createBooking, deleteBooking, hasFullDayBlock, clearCalendarCache } = require('./calendarService');
+const { getAvailableSlots, getBookableStartTimes, createBooking, deleteBooking, hasFullDayBlock, clearCalendarCache, loadCalendarWindow } = require('./calendarService');
 const bookingStore = require('./bookingStore');
 const customerStore = require('./customerStore');
 const memberStore = require('./memberStore');
@@ -131,7 +131,7 @@ async function bootstrap(userId, changeBookingId = null) {
   bootstrapCache.set(key, { promise, expiresAt: now + BOOTSTRAP_CACHE_MS });
   return promise;
 }
-async function availability(userId, storeId, dateStr, suppliedInfo = null, changeBookingId = null) {
+async function availability(userId, storeId, dateStr, suppliedInfo = null, changeBookingId = null, calendarWindow = null) {
   const store = getStore(storeId);
   if (!store) throw new Error('店舗が見つかりません。');
   const info = suppliedInfo || await bootstrap(userId, changeBookingId);
@@ -143,13 +143,13 @@ async function availability(userId, storeId, dateStr, suppliedInfo = null, chang
   const staffRows = [];
   for (const group of groupShiftsByStaff(shifts)) {
     const staff = findStaff(group.staffId);
-    if (!staff || await hasFullDayBlock(staff.calendarId, dateStr, config.booking.fullDayBlockKeyword)) continue;
+    if (!staff || await hasFullDayBlock(staff.calendarId, dateStr, config.booking.fullDayBlockKeyword, calendarWindow)) continue;
     let slots = [];
     for (const block of group.blocks) {
       const free = await getAvailableSlots(dateStr, staff.calendarId, block.start, block.end,
         pairName(customerName)
-          ? { allCalendarIds: storeCalendarIds(storeId, dateStr, block.start, block.end) }
-          : { allCalendarIds: [staff.calendarId], pairCalendarIds: calendars, targetStoreId: storeId });
+          ? { allCalendarIds: storeCalendarIds(storeId, dateStr, block.start, block.end), window: calendarWindow }
+          : { allCalendarIds: [staff.calendarId], pairCalendarIds: calendars, targetStoreId: storeId, window: calendarWindow });
       slots.push(...getBookableStartTimes(free, info.durationMinutes));
     }
     const unique = [...new Map(slots.map((s) => [s.start.format('HH:mm'), { start: s.start.format('HH:mm'), end: s.end.format('HH:mm') }])).values()];
@@ -168,11 +168,15 @@ async function availability(userId, storeId, dateStr, suppliedInfo = null, chang
 }
 
 async function weekAvailability(userId, storeId, startDateStr, changeBookingId = null) {
-  const info = await bootstrap(userId, changeBookingId);
   const dates = [...Array(7)].map((_, index) => dayjs(startDateStr).add(index, 'day').format('YYYY-MM-DD'));
+  const calendarIds = [...new Set(dates.flatMap((dateStr) => storeCalendarIds(storeId, dateStr)))];
+  const [info, calendarWindow] = await Promise.all([
+    bootstrap(userId, changeBookingId),
+    loadCalendarWindow(dates[0], dates[dates.length - 1], calendarIds),
+  ]);
   const results = await Promise.all(dates.map(async (dateStr) => {
     try {
-      return { dateStr, ...(await availability(userId, storeId, dateStr, info)) };
+      return { dateStr, ...(await availability(userId, storeId, dateStr, info, changeBookingId, calendarWindow)) };
     } catch (error) {
       return { dateStr, closed: true, staff: [], error: error.message };
     }

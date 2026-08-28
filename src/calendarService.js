@@ -82,6 +82,37 @@ async function getDayEvents(calendarId, dateStr, bypassCache = false) {
   }, bypassCache);
 }
 
+async function loadCalendarWindow(startDateStr, endDateStr, calendarIds, bypassCache = false) {
+  const tz = config.business.timezone;
+  const ids = [...new Set(calendarIds)].sort();
+  const timeMin = dayjs.tz(`${startDateStr} 00:00`, tz).toISOString();
+  const timeMax = dayjs.tz(`${endDateStr} 00:00`, tz).add(1, 'day').toISOString();
+  const key = `window:${startDateStr}:${endDateStr}:${ids.join(',')}`;
+  return cached(key, async () => {
+    const calendar = getCalendarClient();
+    const [freeBusy, ...eventResponses] = await Promise.all([
+      calendar.freebusy.query({
+        requestBody: {
+          timeMin,
+          timeMax,
+          timeZone: tz,
+          items: ids.map((id) => ({ id })),
+        },
+      }),
+      ...ids.map((calendarId) => calendar.events.list({
+        calendarId,
+        timeMin,
+        timeMax,
+        singleEvents: true,
+      })),
+    ]);
+    return {
+      busyByCalendar: Object.fromEntries(ids.map((id) => [id, freeBusy.data.calendars[id]?.busy || []])),
+      eventsByCalendar: Object.fromEntries(ids.map((id, index) => [id, eventResponses[index].data.items || []])),
+    };
+  }, bypassCache);
+}
+
 /**
  * 指定日(YYYY-MM-DD)・指定カレンダー・指定の勤務時間帯における空き時間帯を計算する。
  * calendarId: スタッフのGoogleカレンダーID
@@ -100,20 +131,25 @@ async function getAvailableSlots(dateStr, calendarId, shiftStart, shiftEnd, opti
   const allCalendarIds = [...new Set(options.allCalendarIds || [calendarId])];
   const pairCalendarIds = [...new Set(options.pairCalendarIds || [])];
   const freeBusyKey = `freebusy:${dayStart.toISOString()}:${dayEnd.toISOString()}:${allCalendarIds.slice().sort().join(',')}`;
-  const res = await cached(freeBusyKey, () => calendar.freebusy.query({
-    requestBody: {
-      timeMin: dayStart.toISOString(),
-      timeMax: dayEnd.toISOString(),
-      timeZone: tz,
-      items: allCalendarIds.map((id) => ({ id })),
-    },
-  }), options.bypassCache);
-
-  const busyRaw = allCalendarIds.flatMap((id) => res.data.calendars[id]?.busy || []);
+  let busyRaw;
+  if (options.window) {
+    busyRaw = allCalendarIds.flatMap((id) => options.window.busyByCalendar[id] || []);
+  } else {
+    const res = await cached(freeBusyKey, () => calendar.freebusy.query({
+      requestBody: {
+        timeMin: dayStart.toISOString(),
+        timeMax: dayEnd.toISOString(),
+        timeZone: tz,
+        items: allCalendarIds.map((id) => ({ id })),
+      },
+    }), options.bypassCache);
+    busyRaw = allCalendarIds.flatMap((id) => res.data.calendars[id]?.busy || []);
+  }
 
   // 通常予約でも、同じ店舗の別スタッフに入っている「ペア」予定は店舗全体を塞ぐ。
   for (const id of pairCalendarIds) {
-    const events = await getDayEvents(id, dateStr, options.bypassCache);
+    const events = options.window?.eventsByCalendar[id]
+      || await getDayEvents(id, dateStr, options.bypassCache);
     for (const ev of events) {
       if (!(ev.summary || '').includes('ペア') || !ev.start?.dateTime || !ev.end?.dateTime) continue;
       const eventStart = dayjs(ev.start.dateTime).tz(tz);
@@ -126,6 +162,7 @@ async function getAvailableSlots(dateStr, calendarId, shiftStart, shiftEnd, opti
   }
 
   const busy = busyRaw
+    .filter((b) => dayjs(b.start).isBefore(dayEnd) && dayjs(b.end).isAfter(dayStart))
     // dayjs(b.start)だけだとタイムゾーン情報が付かず、サーバーの実行環境(Cloud RunはUTC)によっては
     // 表示時に時刻がズレてしまうため、明示的に営業時間と同じタイムゾーンを付与する
     .map((b) => ({ start: dayjs(b.start).tz(tz), end: dayjs(b.end).tz(tz) }))
@@ -284,12 +321,13 @@ async function searchEventsByName(calendarId, name, fromDateStr) {
  * スタッフがイレギュラーに休みたい時、カレンダーに終日予定を1つ入れるだけで
  * その日の予約を丸ごと受け付けないようにするために使う。
  */
-async function hasFullDayBlock(calendarId, dateStr, keyword) {
-  const events = await getDayEvents(calendarId, dateStr);
+async function hasFullDayBlock(calendarId, dateStr, keyword, window = null) {
+  const events = window?.eventsByCalendar[calendarId] || await getDayEvents(calendarId, dateStr);
   return events.some((ev) => {
     const isAllDay = ev.start && ev.start.date && !ev.start.dateTime; // 終日予定かどうか
     const titleMatches = (ev.summary || '').includes(keyword);
-    return isAllDay && titleMatches;
+    const coversDate = !isAllDay || (ev.start.date <= dateStr && ev.end?.date > dateStr);
+    return isAllDay && coversDate && titleMatches;
   });
 }
 
@@ -303,4 +341,5 @@ module.exports = {
   hasFullDayBlock,
   pairEventBelongsToStore,
   clearCalendarCache,
+  loadCalendarWindow,
 };
