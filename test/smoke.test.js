@@ -12,6 +12,7 @@ const { getSeasonalGreeting } = require('../src/seasonalGreeting');
 const { isMonthlyBookingReleased, monthlyBookingMaxDate, bookingCalendarMaxDate } = require('../src/bookingRelease');
 const { createWebBookingToken, verifyWebBookingToken } = require('../src/webBookingToken');
 const { normalizeCustomerName, isPairCustomerName, pairLinkKey } = require('../src/customerStore');
+const { selectTicketDuration } = require('../src/ticketStore');
 
 test('required configuration and staff IDs are valid', () => {
   assert.ok(config.line.channelAccessToken);
@@ -128,6 +129,12 @@ test('pair recognition only accepts pair as the customer-name suffix', () => {
   assert.equal(isPairCustomerName('ペア予約についての長い文章'), false);
   assert.equal(pairLinkKey('三島 塩見 ペア'), '三島塩見ペア');
   assert.equal(pairLinkKey('三島塩見'), null);
+});
+
+test('ticket consumption follows the customer ticket type for direct calendar bookings', () => {
+  assert.equal(selectTicketDuration({ 45: 4, 60: 0 }, 60), 45);
+  assert.equal(selectTicketDuration({ 45: 0, 60: 4 }, 45), 60);
+  assert.equal(selectTicketDuration({ 45: 2, 60: 3 }, 60), 60);
 });
 
 test('bookable slots do not overlap a busy gap', () => {

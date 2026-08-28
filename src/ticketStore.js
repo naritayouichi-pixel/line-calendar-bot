@@ -4,6 +4,17 @@ const collection = db.collection('tickets');
 const TICKET_DURATIONS = [45, 60];
 const TICKET_PACKAGE_COUNTS = [1, 5, 10];
 
+function selectTicketDuration(tickets, fallbackDuration = 60) {
+  const balance45 = Number(tickets?.[45] || 0);
+  const balance60 = Number(tickets?.[60] || 0);
+  if (balance45 > 0 && balance60 <= 0) return 45;
+  if (balance60 > 0 && balance45 <= 0) return 60;
+  if (balance45 > 0 && balance60 > 0 && TICKET_DURATIONS.includes(Number(fallbackDuration))) {
+    return Number(fallbackDuration);
+  }
+  return TICKET_DURATIONS.includes(Number(fallbackDuration)) ? Number(fallbackDuration) : 60;
+}
+
 async function get(userId) {
   const snapshot = await collection.doc(await pairStore.canonicalUserId(userId)).get();
   return snapshot.exists ? snapshot.data() : null;
@@ -77,9 +88,9 @@ async function consumeForDueBooking(bookingId, dateStr, timeStr) {
     const ticketSnapshot = await tx.get(ticketRef);
     if (!ticketSnapshot.exists) return null;
 
-    const duration = booking.durationMinutes || 60;
     const old = ticketSnapshot.data();
     const tickets = { 45: old.tickets?.[45] || 0, 60: old.tickets?.[60] || 0 };
+    const duration = selectTicketDuration(tickets, booking.durationMinutes || 60);
     tickets[duration] = Math.max(0, tickets[duration] - 1);
     const consumedAt = new Date().toISOString();
     tx.update(ticketRef, { tickets });
@@ -93,4 +104,4 @@ async function consumeForDueBooking(bookingId, dateStr, timeStr) {
   });
 }
 
-module.exports = { TICKET_DURATIONS, TICKET_PACKAGE_COUNTS, isTicketCustomer, getBalance, getBalances, getName, addTickets, decrementTicket, registerAsTicketCustomer, consumeForDueBooking };
+module.exports = { TICKET_DURATIONS, TICKET_PACKAGE_COUNTS, selectTicketDuration, isTicketCustomer, getBalance, getBalances, getName, addTickets, decrementTicket, registerAsTicketCustomer, consumeForDueBooking };

@@ -530,6 +530,10 @@ async function syncExternalBookings(userId) {
         const store = getStoreForStaffAtTime(staff.id, ev.dateStr, ev.startTime);
         // シフト時間外の予定は、店舗を安全に特定できないため予約として自動取り込みしない。
         if (!store) continue;
+        const eventDuration = timeDiffMinutes(ev.startTime, ev.endTime);
+        const durationMinutes = await ticketStore.isTicketCustomer(userId)
+          ? ticketStore.selectTicketDuration(await ticketStore.getBalances(userId), eventDuration)
+          : eventDuration;
         await bookingStore.addBooking({
           userId,
           storeId: store.id,
@@ -541,6 +545,7 @@ async function syncExternalBookings(userId) {
           dateStr: ev.dateStr,
           startTime: ev.startTime,
           endTime: ev.endTime,
+          durationMinutes,
           customerName: name,
           source: 'calendar', // Googleカレンダーへの直接入力から取り込んだことが分かるように記録
         });
