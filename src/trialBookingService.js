@@ -2,7 +2,7 @@ const dayjs = require('dayjs');
 const line = require('@line/bot-sdk');
 const config = require('./config');
 const { STORES, STAFF_PHOTOS, getStore, getShiftsForDate, groupShiftsByStaff } = require('./shiftSchedule');
-const { getAvailableSlots, getBookableStartTimes, createBooking, deleteBooking, updateCalendarBooking, hasFullDayBlock } = require('./calendarService');
+const { getAvailableSlots, getBookableStartTimes, createBooking, deleteBooking, updateCalendarBooking, hasFullDayBlock, loadCalendarWindow, clearCalendarCache } = require('./calendarService');
 const bookingStore = require('./bookingStore');
 const trialStore = require('./trialBookingStore');
 const square = require('./squareService');
@@ -42,17 +42,17 @@ function calendarIds(storeId, dateStr) { return [...new Set(getShiftsForDate(sto
 function bootstrap() {
   return { stores:STORES, minDate:dayjs().tz(config.business.timezone).add(1,'day').format('YYYY-MM-DD'), maxDate:dayjs().tz(config.business.timezone).add(config.business.maxDaysAhead,'day').format('YYYY-MM-DD'), durationMinutes:60, amountYen:config.square.trialAmountYen, businessHours:{ start:config.business.startHour, end:config.business.endHour } };
 }
-async function availability(storeId, dateStr) {
+async function availability(storeId, dateStr, calendarWindow = null) {
   const info = bootstrap();
   if (dateStr < info.minDate || dateStr > info.maxDate) throw new Error('この日付は予約できません。');
   const store = getStore(storeId); if (!store) throw new Error('店舗が見つかりません。');
   const { closed, shifts } = getShiftsForDate(storeId, dateStr); if (closed) return { closed:true, staff:[] };
   const ids = calendarIds(storeId, dateStr); const rows = [];
   for (const group of groupShiftsByStaff(shifts)) {
-    const person = staff(group.staffId); if (!person || await hasFullDayBlock(person.calendarId,dateStr,config.booking.fullDayBlockKeyword)) continue;
+    const person = staff(group.staffId); if (!person || await hasFullDayBlock(person.calendarId,dateStr,config.booking.fullDayBlockKeyword,calendarWindow)) continue;
     let slots=[];
     for (const block of group.blocks) {
-      const free=await getAvailableSlots(dateStr,person.calendarId,block.start,block.end,{ allCalendarIds:[person.calendarId], pairCalendarIds:ids, targetStoreId:storeId });
+      const free=await getAvailableSlots(dateStr,person.calendarId,block.start,block.end,{ allCalendarIds:[person.calendarId], pairCalendarIds:ids, targetStoreId:storeId, window:calendarWindow });
       slots.push(...getBookableStartTimes(free,60));
     }
     rows.push({ id:person.id,name:person.name,photoUrl:STAFF_PHOTOS[person.id]||null,slots:[...new Map(slots.map((s)=>[s.start.format('HH:mm'),{start:s.start.format('HH:mm'),end:s.end.format('HH:mm')}])).values()] });
@@ -61,7 +61,9 @@ async function availability(storeId, dateStr) {
 }
 async function week(storeId,start) {
   const dates=[...Array(7)].map((_,i)=>dayjs(start).add(i,'day').format('YYYY-MM-DD'));
-  return { dates:await Promise.all(dates.map(async(dateStr)=>{ try{return{dateStr,...await availability(storeId,dateStr)}}catch(e){return{dateStr,closed:true,staff:[],error:e.message}} })) };
+  const ids=[...new Set(dates.flatMap((dateStr)=>calendarIds(storeId,dateStr)))];
+  const calendarWindow=await loadCalendarWindow(dates[0],dates[dates.length-1],ids);
+  return { dates:await Promise.all(dates.map(async(dateStr)=>{ try{return{dateStr,...await availability(storeId,dateStr,calendarWindow)}}catch(e){return{dateStr,closed:true,staff:[],error:e.message}} })) };
 }
 function validateContact(input) {
   const name=String(input.name||'').replace(/様$/,'').trim();
@@ -74,6 +76,7 @@ function validateContact(input) {
 async function checkout(input) {
   const contact=validateContact(input); const store=getStore(input.storeId); const person=staff(input.staffId);
   if(!store||!person) throw new Error('店舗またはトレーナーが見つかりません。');
+  clearCalendarCache();
   const current=await availability(input.storeId,input.dateStr); const row=current.staff.find((s)=>s.id===input.staffId);
   const slot=row?.slots.find((s)=>s.start===input.startTime&&s.end===input.endTime); if(!slot) throw new Error('選択中にこの時間が埋まりました。');
   const hold=await createBooking({ dateStr:input.dateStr,startTime:input.startTime,endTime:input.endTime,calendarId:person.calendarId,summary:`【決済待ち】体験 ${contact.name}様`,description:'体験予約のSquare決済待ち（10分間仮押さえ）' });
