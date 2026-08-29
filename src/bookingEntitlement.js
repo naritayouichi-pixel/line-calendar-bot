@@ -7,9 +7,14 @@ async function isMonthlyMember(userId) {
   return config.members.some((member) => member.lineUserId === userId) || memberStore.isMember(userId);
 }
 
-function selectUsage({ monthlyMember, monthlyQuota, monthlyUsed, ticketCustomer, ticketBalance, ticketOutstanding }) {
+function selectUsage({ monthlyMember, monthlyQuota, monthlyUsed, ticketCustomer, ticketBalance, ticketOutstanding, ticketOnly = false }) {
   if (!monthlyMember && !ticketCustomer) {
     return { available: true, usageType: null };
+  }
+  if (ticketOnly) {
+    return ticketCustomer && ticketOutstanding < ticketBalance
+      ? { available: true, usageType: 'ticket' }
+      : { available: false, usageType: null };
   }
   if (monthlyMember && monthlyUsed < monthlyQuota) {
     return { available: true, usageType: 'membership' };
@@ -20,7 +25,7 @@ function selectUsage({ monthlyMember, monthlyQuota, monthlyUsed, ticketCustomer,
   return { available: false, usageType: null };
 }
 
-async function resolveBookingUsage(userId, dateStr, duration, excludeBookingId = null) {
+async function resolveBookingUsage(userId, dateStr, duration, excludeBookingId = null, options = {}) {
   const monthlyMember = await isMonthlyMember(userId);
   const ticketCustomer = await ticketStore.isTicketCustomer(userId);
   const month = dateStr.slice(0, 7);
@@ -33,13 +38,14 @@ async function resolveBookingUsage(userId, dateStr, duration, excludeBookingId =
     ? await bookingStore.getOutstandingTicketBookingCount(userId, duration, excludeBookingId, !monthlyMember)
     : 0;
   return {
-    ...selectUsage({ monthlyMember, monthlyQuota, monthlyUsed, ticketCustomer, ticketBalance, ticketOutstanding }),
+    ...selectUsage({ monthlyMember, monthlyQuota, monthlyUsed, ticketCustomer, ticketBalance, ticketOutstanding, ticketOnly: options.ticketOnly }),
     monthlyMember,
     monthlyQuota,
     monthlyUsed,
     ticketCustomer,
     ticketBalance,
     ticketOutstanding,
+    ticketLocked: Boolean(options.ticketOnly),
   };
 }
 
@@ -48,7 +54,7 @@ async function prepareDueBookingUsage(booking) {
   if (booking.usageType === 'membership' || (!booking.usageType && monthlyMember)) {
     return { consumeTicket: false, usageType: 'membership' };
   }
-  if (booking.usageType === 'ticket' && monthlyMember) {
+  if (booking.usageType === 'ticket' && monthlyMember && !booking.ticketLocked) {
     const month = booking.dateStr.slice(0, 7);
     const quota = await memberStore.getMonthlyQuota(booking.userId);
     const monthlyUsed = await bookingStore.getMonthlyMembershipBookingCount(booking.userId, month);

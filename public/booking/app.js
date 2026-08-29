@@ -93,11 +93,16 @@ function selectionLimitError(selection) {
   if (allowance.type === 'monthly') {
     const proposed = [...selections.values(), selection];
     const selectedByMonth = {};
+    let ticketNeeded = 0;
     for (const item of proposed) {
+      if (item.date > allowance.monthlyMaxDate) {
+        ticketNeeded += 1;
+        continue;
+      }
       const month = item.date.slice(0, 7);
       selectedByMonth[month] = (selectedByMonth[month] || 0) + 1;
     }
-    const ticketNeeded = Object.entries(selectedByMonth).reduce((total, [month, selected]) => {
+    ticketNeeded += Object.entries(selectedByMonth).reduce((total, [month, selected]) => {
       const monthlyRemaining = Math.max(0, allowance.quota - (allowance.usedByMonth?.[month] || 0));
       return total + Math.max(0, selected - monthlyRemaining);
     }, 0);

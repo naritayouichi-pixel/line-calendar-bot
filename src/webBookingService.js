@@ -9,7 +9,7 @@ const ticketStore = require('./ticketStore');
 const platinumMemberStore = require('./platinumMemberStore');
 const pairStore = require('./pairStore');
 const { isPlatinumMemberName } = require('./platinumMembers');
-const { monthlyBookingMaxDate, bookingCalendarMaxDate } = require('./bookingRelease');
+const { monthlyBookingMaxDate, bookingCalendarMaxDate, ticketBookingMaxDate } = require('./bookingRelease');
 const { normalizeCustomerName } = require('./customerStore');
 const { resolveBookingUsage } = require('./bookingEntitlement');
 
@@ -48,12 +48,14 @@ async function isPlatinum(userId) {
   }
   return names.some(isPlatinumMemberName);
 }
-async function maxDate(userId) {
-  const now = dayjs().tz(config.business.timezone);
+async function monthlyMaxDate(userId, monthlyMember, now) {
   const normalMax = bookingCalendarMaxDate(now);
-  if (!await isMember(userId)) return normalMax;
+  if (!monthlyMember) return normalMax;
   const openDay = await isPlatinum(userId) ? config.booking.platinumNextMonthOpenDay : config.booking.memberNextMonthOpenDay;
   return monthlyBookingMaxDate(now, openDay, config.booking.memberNextMonthOpenHour, normalMax);
+}
+function ticketMaxDate(now) {
+  return ticketBookingMaxDate(now, config.business.ticketMaxDaysAhead);
 }
 async function durationFor(userId, monthlyMember = false) {
   if (monthlyMember) {
@@ -74,19 +76,24 @@ async function buildBootstrap(userId, changeBookingId = null) {
   catch { throw new Error('顧客名が正しくありません。LINEメニューの「会員種別・紐付け」からフルネームを再登録してください。'); }
   const member = await isMember(userId);
   const platinum = member && await isPlatinum(userId);
-  const ticketCustomer = !member && await ticketStore.isTicketCustomer(userId);
+  const ticketCustomer = await ticketStore.isTicketCustomer(userId);
   const durationMinutes = await durationFor(userId, member);
+  const now = dayjs().tz(config.business.timezone);
+  const monthlyMaxDateStr = await monthlyMaxDate(userId, member, now);
   let membershipDetail = '';
   let bookingAllowance = { type: 'unlimited' };
+  let maximumDate = monthlyMaxDateStr;
   if (member) {
     const quota = await memberStore.getMonthlyQuota(userId);
     const ticketBalance = await ticketStore.getBalance(userId, durationMinutes);
     const ticketOutstanding = await bookingStore.getOutstandingTicketBookingCount(userId, durationMinutes, changeBookingId);
     if (quota > 0) membershipDetail = `${durationMinutes}分×${quota}回${ticketBalance > 0 ? ` / 追加チケット${ticketBalance}枚` : ''}`;
-    const minDate = dayjs().tz(config.business.timezone).add(1, 'day');
-    const maximumDate = dayjs(await maxDate(userId));
+    const ticketRemaining = Math.max(0, ticketBalance - ticketOutstanding);
+    if (ticketRemaining > 0) maximumDate = [maximumDate, ticketMaxDate(now)].sort().at(-1);
+    const minDate = now.add(1, 'day');
+    const monthlyMaximumDate = dayjs(monthlyMaxDateStr);
     const months = [];
-    for (let month = minDate.startOf('month'); !month.isAfter(maximumDate, 'month'); month = month.add(1, 'month')) {
+    for (let month = minDate.startOf('month'); !month.isAfter(monthlyMaximumDate, 'month'); month = month.add(1, 'month')) {
       months.push(month.format('YYYY-MM'));
     }
     const usedByMonth = Object.fromEntries(await Promise.all(months.map(async (month) => [month, await bookingStore.getMonthlyMembershipBookingCount(userId, month, changeBookingId)])));
@@ -94,13 +101,15 @@ async function buildBootstrap(userId, changeBookingId = null) {
       type: 'monthly',
       quota,
       usedByMonth,
-      ticketRemaining: Math.max(0, ticketBalance - ticketOutstanding),
+      ticketRemaining,
+      monthlyMaxDate: monthlyMaxDateStr,
     };
   } else if (ticketCustomer) {
     const balance = await ticketStore.getBalance(userId, durationMinutes);
     membershipDetail = `${durationMinutes}分×${balance}回`;
     const outstanding = await bookingStore.getOutstandingCount(userId, durationMinutes, changeBookingId);
     bookingAllowance = { type: 'ticket', remaining: Math.max(0, balance - outstanding) };
+    if (bookingAllowance.remaining > 0) maximumDate = [maximumDate, ticketMaxDate(now)].sort().at(-1);
   }
   let changeBooking = null;
   if (changeBookingId) {
@@ -115,8 +124,8 @@ async function buildBootstrap(userId, changeBookingId = null) {
       membershipDetail,
     },
     stores: STORES,
-    minDate: dayjs().tz(config.business.timezone).add(1, 'day').format('YYYY-MM-DD'),
-    maxDate: await maxDate(userId),
+    minDate: now.add(1, 'day').format('YYYY-MM-DD'),
+    maxDate: maximumDate,
     durationMinutes,
     bookingAllowance,
     businessHours: { start: config.business.startHour, end: config.business.endHour },
@@ -205,7 +214,8 @@ async function book(userId, input) {
   const slot = row?.slots.find((s) => s.start === input.startTime && s.end === input.endTime);
   if (!slot) throw new Error('選択中にこの時間が埋まりました。別の時間を選んでください。');
   const duration = info.durationMinutes;
-  const entitlement = await resolveBookingUsage(userId, input.dateStr, duration);
+  const ticketOnly = info.bookingAllowance.type === 'monthly' && input.dateStr > info.bookingAllowance.monthlyMaxDate;
+  const entitlement = await resolveBookingUsage(userId, input.dateStr, duration, null, { ticketOnly });
   if (!entitlement.available) {
     throw new Error(entitlement.monthlyMember
       ? '月会費の予約枠と追加チケットの残数を超えるため、予約できません。'
@@ -221,6 +231,7 @@ async function book(userId, input) {
     calendarId: staff.calendarId, eventId: event.id, dateStr: input.dateStr,
     startTime: input.startTime, endTime: input.endTime, durationMinutes: duration, customerName: info.customer.name,
     usageType: entitlement.usageType,
+    ticketLocked: entitlement.ticketLocked,
   });
   clearBootstrapCache(userId);
   return { bookingId, storeName: store.name, staffName: staff.name, customerName: info.customer.name, dateStr: input.dateStr, startTime: input.startTime, endTime: input.endTime };
@@ -243,7 +254,8 @@ async function change(userId, bookingId, input) {
   const slot = row?.slots.find((s) => s.start === input.startTime && s.end === input.endTime);
   if (!slot) throw new Error('選択中にこの時間が埋まりました。別の時間を選んでください。');
   const duration = info.durationMinutes;
-  const entitlement = await resolveBookingUsage(userId, input.dateStr, duration, bookingId);
+  const ticketOnly = info.bookingAllowance.type === 'monthly' && input.dateStr > info.bookingAllowance.monthlyMaxDate;
+  const entitlement = await resolveBookingUsage(userId, input.dateStr, duration, bookingId, { ticketOnly });
   if (!entitlement.available) {
     throw new Error(entitlement.monthlyMember
       ? '月会費の予約枠と追加チケットの残数を超えるため、予約できません。'
@@ -263,6 +275,7 @@ async function change(userId, bookingId, input) {
     calendarId: staff.calendarId, eventId: event.id, dateStr: input.dateStr,
     startTime: input.startTime, endTime: input.endTime, durationMinutes: duration, customerName: info.customer.name,
     usageType: entitlement.usageType,
+    ticketLocked: entitlement.ticketLocked,
   };
   newBooking.bookingId = await bookingStore.addBooking(newBooking);
   clearBootstrapCache(userId);

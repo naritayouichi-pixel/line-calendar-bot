@@ -23,7 +23,7 @@ const platinumMemberStore = require('./platinumMemberStore');
 const pairStore = require('./pairStore');
 const reservationReminderStore = require('./reservationReminderStore');
 const { getSeasonalGreeting } = require('./seasonalGreeting');
-const { isMonthlyBookingReleased, monthlyBookingMaxDate, bookingCalendarMaxDate } = require('./bookingRelease');
+const { isMonthlyBookingReleased, monthlyBookingMaxDate, bookingCalendarMaxDate, ticketBookingMaxDate } = require('./bookingRelease');
 const { createWebBookingToken, verifyWebBookingToken } = require('./webBookingToken');
 const webBookingService = require('./webBookingService');
 const trialBookingService = require('./trialBookingService');
@@ -467,30 +467,40 @@ async function showMemberMenu(event, userId) {
  */
 async function effectiveMaxDateStr(userId) {
   const normalMax = maxBookingDateStr();
+  let maximumDate = normalMax;
 
   if (await isMember(userId)) {
-    const today = dayjs().tz(config.business.timezone);
-    const openDay = await isPlatinumMember(userId)
-      ? config.booking.platinumNextMonthOpenDay
-      : config.booking.memberNextMonthOpenDay;
-
-    return monthlyBookingMaxDate(
-      today,
-      openDay,
-      config.booking.memberNextMonthOpenHour,
-      normalMax
-    );
+    maximumDate = await monthlyMemberMaxDateStr(userId);
   }
 
   if (await ticketStore.isTicketCustomer(userId)) {
-    // チケット会員は日付の制限なし(実質無制限の日数を使う)
-    return dayjs()
-      .tz(config.business.timezone)
-      .add(config.business.ticketMaxDaysAhead, 'day')
-      .format('YYYY-MM-DD');
+    const ticketMaximumDate = ticketBookingMaxDate(
+      dayjs().tz(config.business.timezone),
+      config.business.ticketMaxDaysAhead
+    );
+    if (ticketMaximumDate > maximumDate) maximumDate = ticketMaximumDate;
   }
 
-  return normalMax; // ビジター等は通常通り
+  return maximumDate;
+}
+
+async function monthlyMemberMaxDateStr(userId) {
+  const today = dayjs().tz(config.business.timezone);
+  const openDay = await isPlatinumMember(userId)
+    ? config.booking.platinumNextMonthOpenDay
+    : config.booking.memberNextMonthOpenDay;
+  return monthlyBookingMaxDate(
+    today,
+    openDay,
+    config.booking.memberNextMonthOpenHour,
+    maxBookingDateStr()
+  );
+}
+
+async function isAdvanceTicketDate(userId, dateStr) {
+  return await isMember(userId)
+    && await ticketStore.isTicketCustomer(userId)
+    && dateStr > await monthlyMemberMaxDateStr(userId);
 }
 
 async function memberBookingReleaseLabel(userId) {
@@ -1413,7 +1423,8 @@ async function finalizeBooking(event, userId, customerName) {
     return replyText(event, '申し訳ございません。選択中にこの時間帯が埋まりました。もう一度「予約」からお選びください。');
   }
 
-  const entitlement = await resolveBookingUsage(userId, booking.dateStr, durationMinutes);
+  const ticketOnly = await isAdvanceTicketDate(userId, booking.dateStr);
+  const entitlement = await resolveBookingUsage(userId, booking.dateStr, durationMinutes, null, { ticketOnly });
   if (!entitlement.available) {
     return replyText(
       event,
@@ -1455,6 +1466,7 @@ async function finalizeBooking(event, userId, customerName) {
     endTime: booking.endTime,
     durationMinutes,
     usageType: entitlement.usageType,
+    ticketLocked: entitlement.ticketLocked,
     customerName,
   });
 
@@ -1521,7 +1533,8 @@ async function finalizeChange(event, oldBookingId, newDetails) {
   const customerName = oldBooking.customerName;
   const newDurationMinutes = timeDiffMinutes(newDetails.startTime, newDetails.endTime);
 
-  const entitlement = await resolveBookingUsage(userId, newDetails.dateStr, newDurationMinutes, oldBookingId);
+  const ticketOnly = await isAdvanceTicketDate(userId, newDetails.dateStr);
+  const entitlement = await resolveBookingUsage(userId, newDetails.dateStr, newDurationMinutes, oldBookingId, { ticketOnly });
   if (!entitlement.available) {
     return replyText(
       event,
@@ -1587,6 +1600,7 @@ async function finalizeChange(event, oldBookingId, newDetails) {
     endTime: newDetails.endTime,
     durationMinutes: newDurationMinutes,
     usageType: entitlement.usageType,
+    ticketLocked: entitlement.ticketLocked,
     customerName,
   };
   const newBookingId = await bookingStore.addBooking(newBooking);

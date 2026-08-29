@@ -81,8 +81,8 @@ function buildStoreSelectionMessage(extraParams = '') {
 function buildDatePickerMessage(storeId, storeName, extraParams = '', maxDateStrOverride = null) {
   const today = dayjs().tz(config.business.timezone);
   const defaultMax = bookingCalendarMaxDate(today);
-  // 月会費メンバーの「来月分は25日から」制限がある場合、外部から上限日を指定できる
-  const max = maxDateStrOverride && maxDateStrOverride < defaultMax ? maxDateStrOverride : defaultMax;
+  // 会員種別ごとの予約可能期間を外部から指定できる。
+  const max = maxDateStrOverride || defaultMax;
 
   // 明日から上限日までの日付を、定休日を除いてリストアップする
   const dateStrs = [];

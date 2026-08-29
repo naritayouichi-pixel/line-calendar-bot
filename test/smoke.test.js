@@ -9,7 +9,7 @@ const messages = require('../src/lineService');
 const { app, isCustomerLinkPendingActive } = require('../src/index');
 const platinum = require('../src/platinumMembers');
 const { getSeasonalGreeting } = require('../src/seasonalGreeting');
-const { isMonthlyBookingReleased, monthlyBookingMaxDate, bookingCalendarMaxDate } = require('../src/bookingRelease');
+const { isMonthlyBookingReleased, monthlyBookingMaxDate, bookingCalendarMaxDate, ticketBookingMaxDate } = require('../src/bookingRelease');
 const { createWebBookingToken, verifyWebBookingToken } = require('../src/webBookingToken');
 const { normalizeCustomerName, isPairCustomerName, pairLinkKey } = require('../src/customerStore');
 const { selectTicketDuration } = require('../src/ticketStore');
@@ -108,6 +108,10 @@ test('standard booking calendar is not limited to 30 days and ends next month', 
   assert.equal(bookingCalendarMaxDate(dayjs('2026-01-31T10:00:00')), '2026-02-28');
 });
 
+test('ticket bookings remain available for 90 days', () => {
+  assert.equal(ticketBookingMaxDate(dayjs('2026-08-29T10:00:00'), 90), '2026-11-27');
+});
+
 test('web booking links securely preserve the existing LINE user ID', () => {
   const token = createWebBookingToken('U-test-customer', 60);
   assert.equal(verifyWebBookingToken(token).userId, 'U-test-customer');
@@ -151,6 +155,10 @@ test('monthly members use their monthly quota before additional tickets', () => 
     monthlyMember: true, monthlyQuota: 4, monthlyUsed: 4,
     ticketCustomer: true, ticketBalance: 5, ticketOutstanding: 5,
   }), { available: false, usageType: null });
+  assert.deepEqual(selectUsage({
+    monthlyMember: true, monthlyQuota: 4, monthlyUsed: 0,
+    ticketCustomer: true, ticketBalance: 5, ticketOutstanding: 1, ticketOnly: true,
+  }), { available: true, usageType: 'ticket' });
 });
 
 test('bookable slots do not overlap a busy gap', () => {
