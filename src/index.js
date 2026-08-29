@@ -28,6 +28,7 @@ const { createWebBookingToken, verifyWebBookingToken } = require('./webBookingTo
 const webBookingService = require('./webBookingService');
 const trialBookingService = require('./trialBookingService');
 const squareService = require('./squareService');
+const { resolveBookingUsage, prepareDueBookingUsage } = require('./bookingEntitlement');
 const {
   buildStoreSelectionMessage,
   buildDatePickerMessage,
@@ -215,6 +216,8 @@ app.post('/tasks/consume-due-tickets', express.json(), async (req, res) => {
     const consumed = [];
     for (const booking of bookings) {
       if (booking.startTime > timeStr || booking.attended) continue;
+      const dueUsage = await prepareDueBookingUsage(booking);
+      if (!dueUsage.consumeTicket) continue;
       const result = await ticketStore.consumeForDueBooking(booking.bookingId, dateStr, timeStr);
       if (result) consumed.push(result);
     }
@@ -382,7 +385,7 @@ async function buildMemberMenu(userId) {
   if (await isMember(userId)) {
     return buildMemberMenuMessage(
       await isPlatinumMember(userId) ? '月会費メンバー（プラチナ）' : '月会費メンバー',
-      null
+      await ticketStore.getBalances(userId)
     );
   }
   if (await ticketStore.isTicketCustomer(userId)) {
@@ -531,9 +534,13 @@ async function syncExternalBookings(userId) {
         // シフト時間外の予定は、店舗を安全に特定できないため予約として自動取り込みしない。
         if (!store) continue;
         const eventDuration = timeDiffMinutes(ev.startTime, ev.endTime);
-        const durationMinutes = await ticketStore.isTicketCustomer(userId)
-          ? ticketStore.selectTicketDuration(await ticketStore.getBalances(userId), eventDuration)
-          : eventDuration;
+        const monthlyMember = await isMember(userId);
+        const durationMinutes = monthlyMember
+          ? await memberStore.getSessionDuration(userId) || eventDuration
+          : await ticketStore.isTicketCustomer(userId)
+            ? ticketStore.selectTicketDuration(await ticketStore.getBalances(userId), eventDuration)
+            : eventDuration;
+        const entitlement = await resolveBookingUsage(userId, ev.dateStr, durationMinutes);
         await bookingStore.addBooking({
           userId,
           storeId: store.id,
@@ -546,6 +553,7 @@ async function syncExternalBookings(userId) {
           startTime: ev.startTime,
           endTime: ev.endTime,
           durationMinutes,
+          usageType: entitlement.available ? entitlement.usageType : (monthlyMember ? 'membership' : 'ticket'),
           customerName: name,
           source: 'calendar', // Googleカレンダーへの直接入力から取り込んだことが分かるように記録
         });
@@ -795,6 +803,13 @@ async function handleTicketAdminDialogue(event, adminUserId, text) {
       );
     }
     pendingTicketAdmin.delete(adminUserId);
+
+    if (await isMember(customerId)) {
+      const memberDuration = await memberStore.getSessionDuration(customerId);
+      if (memberDuration && memberDuration !== state.duration) {
+        return replyText(event, `このお客様は月会費${memberDuration}分コースです。${memberDuration}分チケットを追加してください。`);
+      }
+    }
 
     // お客様の名前が分かれば(過去にLINE予約したことがあれば)一緒に記録しておく
     const knownNames = await bookingStore.getDistinctCustomerNames(customerId);
@@ -1070,6 +1085,12 @@ async function handlePostback(event) {
     if (!duration || !count) {
       return replyText(event, 'パッケージの指定が正しくありませんでした。もう一度お試しください。');
     }
+    if (await isMember(userId)) {
+      const memberDuration = await memberStore.getSessionDuration(userId);
+      if (memberDuration && memberDuration !== duration) {
+        return replyText(event, `月会費コースと同じ${memberDuration}分チケットを選んでください。`);
+      }
+    }
     const knownNames = await bookingStore.getDistinctCustomerNames(userId);
     const name = knownNames[0] || await ticketStore.getName(userId) || '(名前未登録)';
     const newBalance = await ticketStore.addTickets(userId, name, duration, count);
@@ -1243,7 +1264,12 @@ async function handleSelectStaff(event, data) {
   // (両方残っている場合は基本想定しないが、念のため両方残っていれば45分を優先する)
   // 月会費メンバーは、登録したコースのセッション時間を使う(未設定ならデフォルト時間)
   let durationMinutes = config.booking.durationMinutes;
-  if (await ticketStore.isTicketCustomer(userId)) {
+  if (await isMember(userId)) {
+    const sessionDuration = await memberStore.getSessionDuration(userId);
+    if (sessionDuration) {
+      durationMinutes = sessionDuration;
+    }
+  } else if (await ticketStore.isTicketCustomer(userId)) {
     const balances = await ticketStore.getBalances(userId);
     if (balances[45] > 0) {
       durationMinutes = 45;
@@ -1251,11 +1277,6 @@ async function handleSelectStaff(event, data) {
       durationMinutes = 60;
     } else {
       return replyText(event, 'チケットの残数がありません。ご購入後にあらためてご予約ください。');
-    }
-  } else if (await isMember(userId)) {
-    const sessionDuration = await memberStore.getSessionDuration(userId);
-    if (sessionDuration) {
-      durationMinutes = sessionDuration;
     }
   }
 
@@ -1392,30 +1413,14 @@ async function finalizeBooking(event, userId, customerName) {
     return replyText(event, '申し訳ございません。選択中にこの時間帯が埋まりました。もう一度「予約」からお選びください。');
   }
 
-  // チケット会員の場合、その時間(45分/60分)の残数を超える新規予約は受け付けない
-  const isTicketCustomer = await ticketStore.isTicketCustomer(userId);
-  if (isTicketCustomer) {
-    const balance = await ticketStore.getBalance(userId, durationMinutes);
-    const outstanding = await bookingStore.getOutstandingCount(userId, durationMinutes);
-    if (outstanding >= balance) {
-      return client.replyMessage({
-        replyToken: event.replyToken,
-        messages: [buildTicketLimitReachedMessage(durationMinutes, balance)],
-      });
-    }
-  }
-
-  // 月会費メンバーの場合、その月の回数上限を超える新規予約は受け付けない(繰り越しなし)
-  if (await isMember(userId)) {
-    const quota = await memberStore.getMonthlyQuota(userId);
-    const yearMonth = booking.dateStr.slice(0, 7); // "YYYY-MM"
-    const used = await bookingStore.getMonthlyBookingCount(userId, yearMonth);
-    if (used >= quota) {
-      return client.replyMessage({
-        replyToken: event.replyToken,
-        messages: [buildMonthlyQuotaReachedMessage(quota)],
-      });
-    }
+  const entitlement = await resolveBookingUsage(userId, booking.dateStr, durationMinutes);
+  if (!entitlement.available) {
+    return replyText(
+      event,
+      entitlement.monthlyMember
+        ? '月会費の予約枠と追加チケットの残数を超えるため、予約できません。'
+        : 'チケット残数を超える予約はできません。'
+    );
   }
 
   let created;
@@ -1426,7 +1431,7 @@ async function finalizeBooking(event, userId, customerName) {
       endTime: booking.endTime,
       calendarId: booking.calendarId,
       summary: `${customerName}様`,
-      description: `LINE予約Botからの自動登録\nお名前: ${customerName}様\n店舗: ${booking.storeName}`,
+      description: `LINE予約Botからの自動登録\nお名前: ${customerName}様\n店舗: ${booking.storeName}\n利用: ${entitlement.usageType === 'ticket' ? '追加チケット' : entitlement.usageType === 'membership' ? '月会費' : '通常'}`,
     });
   } catch (err) {
     console.error('カレンダー登録でエラー:', err);
@@ -1449,6 +1454,7 @@ async function finalizeBooking(event, userId, customerName) {
     startTime: booking.startTime,
     endTime: booking.endTime,
     durationMinutes,
+    usageType: entitlement.usageType,
     customerName,
   });
 
@@ -1515,31 +1521,14 @@ async function finalizeChange(event, oldBookingId, newDetails) {
   const customerName = oldBooking.customerName;
   const newDurationMinutes = timeDiffMinutes(newDetails.startTime, newDetails.endTime);
 
-  // チケット会員の場合、変更元の予約自体は除いた上で、変更後の時間(45分/60分)の残数を確認する
-  // (変更は「1件減って1件増える」だけなので、変更元を除けば残数チェックの対象は増えない)
-  const isTicketCustomer = await ticketStore.isTicketCustomer(userId);
-  if (isTicketCustomer) {
-    const balance = await ticketStore.getBalance(userId, newDurationMinutes);
-    const outstanding = await bookingStore.getOutstandingCount(userId, newDurationMinutes, oldBookingId);
-    if (outstanding >= balance) {
-      return client.replyMessage({
-        replyToken: event.replyToken,
-        messages: [buildTicketLimitReachedMessage(newDurationMinutes, balance)],
-      });
-    }
-  }
-
-  // 月会費メンバーの場合、変更元の予約自体は除いた上で、変更後の月の回数上限を確認する
-  if (await isMember(userId)) {
-    const quota = await memberStore.getMonthlyQuota(userId);
-    const newYearMonth = newDetails.dateStr.slice(0, 7);
-    const used = await bookingStore.getMonthlyBookingCount(userId, newYearMonth, oldBookingId);
-    if (used >= quota) {
-      return client.replyMessage({
-        replyToken: event.replyToken,
-        messages: [buildMonthlyQuotaReachedMessage(quota)],
-      });
-    }
+  const entitlement = await resolveBookingUsage(userId, newDetails.dateStr, newDurationMinutes, oldBookingId);
+  if (!entitlement.available) {
+    return replyText(
+      event,
+      entitlement.monthlyMember
+        ? '月会費の予約枠と追加チケットの残数を超えるため、変更できません。'
+        : 'チケット残数を超えるため、変更できません。'
+    );
   }
 
   // 変更操作中に別予約が入った場合も、確定直前の再確認で重複を防ぐ。
@@ -1569,7 +1558,7 @@ async function finalizeChange(event, oldBookingId, newDetails) {
       endTime: newDetails.endTime,
       calendarId: newDetails.calendarId,
       summary: `${customerName}様`,
-      description: `LINE予約Botからの自動登録(変更)\nお名前: ${customerName}様\n店舗: ${newDetails.storeName}`,
+      description: `LINE予約Botからの自動登録(変更)\nお名前: ${customerName}様\n店舗: ${newDetails.storeName}\n利用: ${entitlement.usageType === 'ticket' ? '追加チケット' : entitlement.usageType === 'membership' ? '月会費' : '通常'}`,
     });
   } catch (err) {
     console.error('カレンダー登録(変更)でエラー:', err);
@@ -1597,6 +1586,7 @@ async function finalizeChange(event, oldBookingId, newDetails) {
     startTime: newDetails.startTime,
     endTime: newDetails.endTime,
     durationMinutes: newDurationMinutes,
+    usageType: entitlement.usageType,
     customerName,
   };
   const newBookingId = await bookingStore.addBooking(newBooking);
@@ -1677,19 +1667,23 @@ async function handleConfirmAttendance(event, data) {
     return replyText(event, `${booking.customerName}様は既に来店確認済みです。`);
   }
 
-  await bookingStore.markAttended(booking.bookingId);
-
-  // 予約時に記録した所要時間(45分/60分)のチケットを消費する
-  const duration = booking.durationMinutes || config.booking.durationMinutes;
-  let remainingBalance = 0;
-  if (await ticketStore.isTicketCustomer(booking.userId)) {
-    remainingBalance = await ticketStore.decrementTicket(booking.userId, duration);
+  const dueUsage = await prepareDueBookingUsage(booking);
+  if (dueUsage.consumeTicket && await ticketStore.isTicketCustomer(booking.userId)) {
+    const balances = await ticketStore.getBalances(booking.userId);
+    const duration = ticketStore.selectTicketDuration(
+      balances,
+      booking.durationMinutes || config.booking.durationMinutes
+    );
+    const remainingBalance = await ticketStore.decrementTicket(booking.userId, duration);
+    await bookingStore.markAttended(booking.bookingId);
+    return client.replyMessage({
+      replyToken: event.replyToken,
+      messages: [buildAttendanceConfirmedMessage(booking.customerName, duration, remainingBalance)],
+    });
   }
 
-  return client.replyMessage({
-    replyToken: event.replyToken,
-    messages: [buildAttendanceConfirmedMessage(booking.customerName, duration, remainingBalance)],
-  });
+  await bookingStore.markAttended(booking.bookingId);
+  return replyText(event, `${booking.customerName}様の来店を確認しました。`);
 }
 
 /**

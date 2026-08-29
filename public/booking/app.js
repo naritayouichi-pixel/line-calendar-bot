@@ -91,11 +91,19 @@ function selectionLimitError(selection) {
     if (selections.size >= allowance.remaining) return `予約に使えるチケットは残り${allowance.remaining}回です。`;
   }
   if (allowance.type === 'monthly') {
-    const month = selection.date.slice(0, 7);
-    const selectedInMonth = [...selections.values()].filter((item) => item.date.startsWith(month)).length;
-    const used = allowance.usedByMonth?.[month] || 0;
-    const remaining = Math.max(0, allowance.quota - used);
-    if (selectedInMonth >= remaining) return `${Number(month.slice(5))}月に追加できる予約は残り${remaining}回です。`;
+    const proposed = [...selections.values(), selection];
+    const selectedByMonth = {};
+    for (const item of proposed) {
+      const month = item.date.slice(0, 7);
+      selectedByMonth[month] = (selectedByMonth[month] || 0) + 1;
+    }
+    const ticketNeeded = Object.entries(selectedByMonth).reduce((total, [month, selected]) => {
+      const monthlyRemaining = Math.max(0, allowance.quota - (allowance.usedByMonth?.[month] || 0));
+      return total + Math.max(0, selected - monthlyRemaining);
+    }, 0);
+    if (ticketNeeded > (allowance.ticketRemaining || 0)) {
+      return '月会費の予約枠と追加チケットの残数を超えるため、これ以上選択できません。';
+    }
   }
   return '';
 }
@@ -103,8 +111,7 @@ function markAllowanceUsed(selection) {
   const allowance = data.bookingAllowance;
   if (allowance?.type === 'ticket') allowance.remaining = Math.max(0, allowance.remaining - 1);
   if (allowance?.type === 'monthly') {
-    const month = selection.date.slice(0, 7);
-    allowance.usedByMonth[month] = (allowance.usedByMonth[month] || 0) + 1;
+    // 予約完了後はサーバーから最新の利用区分を再取得するため、ここでは概算値を更新しない。
   }
 }
 
@@ -232,6 +239,8 @@ $('confirm').onclick = async () => {
     button.hidden = true;
     $('cancel').textContent = '閉じる';
   }
+  data = await api('bootstrap');
+  $('member').innerHTML = `<strong>${data.customer.memberType}</strong>${data.customer.membershipDetail ? `<span>${data.customer.membershipDetail}</span>` : ''}`;
   await loadWeek();
 };
 $('prev').onclick = () => { weekStart = addDays(weekStart, -7); loadWeek(); };

@@ -80,6 +80,7 @@ async function consumeForDueBooking(bookingId, dateStr, timeStr) {
     if (
       booking.status !== 'confirmed' ||
       booking.attended ||
+      booking.usageType === 'membership' ||
       booking.dateStr !== dateStr ||
       booking.startTime > timeStr
     ) return null;

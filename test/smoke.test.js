@@ -13,6 +13,7 @@ const { isMonthlyBookingReleased, monthlyBookingMaxDate, bookingCalendarMaxDate 
 const { createWebBookingToken, verifyWebBookingToken } = require('../src/webBookingToken');
 const { normalizeCustomerName, isPairCustomerName, pairLinkKey } = require('../src/customerStore');
 const { selectTicketDuration } = require('../src/ticketStore');
+const { selectUsage } = require('../src/bookingEntitlement');
 
 test('required configuration and staff IDs are valid', () => {
   assert.ok(config.line.channelAccessToken);
@@ -135,6 +136,21 @@ test('ticket consumption follows the customer ticket type for direct calendar bo
   assert.equal(selectTicketDuration({ 45: 4, 60: 0 }, 60), 45);
   assert.equal(selectTicketDuration({ 45: 0, 60: 4 }, 45), 60);
   assert.equal(selectTicketDuration({ 45: 2, 60: 3 }, 60), 60);
+});
+
+test('monthly members use their monthly quota before additional tickets', () => {
+  assert.deepEqual(selectUsage({
+    monthlyMember: true, monthlyQuota: 4, monthlyUsed: 3,
+    ticketCustomer: true, ticketBalance: 5, ticketOutstanding: 0,
+  }), { available: true, usageType: 'membership' });
+  assert.deepEqual(selectUsage({
+    monthlyMember: true, monthlyQuota: 4, monthlyUsed: 4,
+    ticketCustomer: true, ticketBalance: 5, ticketOutstanding: 0,
+  }), { available: true, usageType: 'ticket' });
+  assert.deepEqual(selectUsage({
+    monthlyMember: true, monthlyQuota: 4, monthlyUsed: 4,
+    ticketCustomer: true, ticketBalance: 5, ticketOutstanding: 5,
+  }), { available: false, usageType: null });
 });
 
 test('bookable slots do not overlap a busy gap', () => {

@@ -37,6 +37,23 @@ async function getOutstandingCount(userId, duration = null, excludeId = null) {
 async function getMonthlyBookingCount(userId, month, excludeId = null) {
   return (await userRecords(userId)).filter((b) => b.status === 'confirmed' && b.bookingId !== excludeId && b.dateStr.startsWith(month)).length;
 }
+async function getMonthlyMembershipBookingCount(userId, month, excludeId = null) {
+  return (await userRecords(userId)).filter((b) =>
+    b.status === 'confirmed'
+    && b.bookingId !== excludeId
+    && b.dateStr.startsWith(month)
+    && b.usageType !== 'ticket'
+  ).length;
+}
+async function getOutstandingTicketBookingCount(userId, duration = null, excludeId = null, includeLegacy = false) {
+  return (await userRecords(userId)).filter((b) =>
+    b.status === 'confirmed'
+    && !b.attended
+    && b.bookingId !== excludeId
+    && (duration === null || b.durationMinutes === duration)
+    && (b.usageType === 'ticket' || (includeLegacy && !b.usageType))
+  ).length;
+}
 async function getDistinctCustomerNames(userId) {
   return [...new Set((await userRecords(userId)).map((b) => b.customerName).filter(Boolean))];
 }
@@ -50,4 +67,4 @@ async function getBookingsForDate(dateStr) {
   return snapshot.docs.map((doc) => doc.data()).filter((b) => b.status === 'confirmed');
 }
 
-module.exports = { addBooking, getBooking, getBookingsByUser, updateBooking, cancelBooking, markAttended, getOutstandingCount, getMonthlyBookingCount, getDistinctCustomerNames, findByEventId, getBookingsForDate };
+module.exports = { addBooking, getBooking, getBookingsByUser, updateBooking, cancelBooking, markAttended, getOutstandingCount, getMonthlyBookingCount, getMonthlyMembershipBookingCount, getOutstandingTicketBookingCount, getDistinctCustomerNames, findByEventId, getBookingsForDate };
