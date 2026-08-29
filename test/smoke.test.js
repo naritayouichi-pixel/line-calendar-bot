@@ -220,6 +220,7 @@ test('HTTP health, webhook, and ticket automation routes are registered', () => 
   assert.ok(routes.some((route) => route.path === '/tasks/consume-due-tickets' && route.methods.post));
   assert.ok(routes.some((route) => route.path === '/tasks/send-monthly-reservation-reminder' && route.methods.post));
   assert.ok(routes.some((route) => route.path === '/api/web-booking/bootstrap' && route.methods.get));
+  assert.ok(routes.some((route) => route.path === '/api/web-booking/sync-external' && route.methods.post));
   assert.ok(routes.some((route) => route.path === '/api/web-booking/availability' && route.methods.get));
   assert.ok(routes.some((route) => route.path === '/api/web-booking/week-availability' && route.methods.get));
   assert.ok(routes.some((route) => route.path === '/api/web-booking/book' && route.methods.post));

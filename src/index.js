@@ -135,6 +135,18 @@ app.get('/api/web-booking/bootstrap', async (req, res) => {
   catch (error) { res.status(400).json({ error: error.message }); }
 });
 
+app.post('/api/web-booking/sync-external', express.json(), async (req, res) => {
+  const userId = webBookingUser(req, res); if (!userId) return;
+  try {
+    await syncExternalBookings(userId);
+    webBookingService.clearBootstrapCache(userId);
+    res.json(await webBookingService.bootstrap(userId, req.query.changeBookingId || null));
+  } catch (error) {
+    console.error('Googleカレンダー直接予約の同期でエラー:', error);
+    res.status(400).json({ error: error.message });
+  }
+});
+
 app.get('/api/trial/bootstrap', (req,res)=>res.json(trialBookingService.bootstrap()));
 app.get('/api/trial/week-availability', async (req,res)=>{try{res.json(await trialBookingService.week(req.query.storeId,req.query.start));}catch(e){res.status(400).json({error:e.message});}});
 app.post('/api/trial/checkout', express.json(), async (req,res)=>{try{res.json(await trialBookingService.checkout(req.body||{}));}catch(e){console.error('体験予約決済開始エラー:',e);res.status(400).json({error:e.message});}});
@@ -170,6 +182,8 @@ app.get('/api/web-booking/week-availability', async (req, res) => {
 app.post('/api/web-booking/book', express.json(), async (req, res) => {
   const userId = webBookingUser(req, res); if (!userId) return;
   try {
+    await syncExternalBookings(userId);
+    webBookingService.clearBootstrapCache(userId);
     const result = await webBookingService.book(userId, req.body || {});
     res.json(result);
     try {
@@ -186,6 +200,8 @@ app.post('/api/web-booking/book', express.json(), async (req, res) => {
 app.post('/api/web-booking/change', express.json(), async (req, res) => {
   const userId = webBookingUser(req, res); if (!userId) return;
   try {
+    await syncExternalBookings(userId);
+    webBookingService.clearBootstrapCache(userId);
     const result = await webBookingService.change(userId, req.query.changeBookingId, req.body || {});
     res.json(result);
     try {
@@ -518,58 +534,87 @@ async function memberBookingReleaseLabel(userId) {
  * 過去にLINEで一度も予約したことがないお客様は、照合できるお名前が
  * ないため、この同期の対象にはならない(サーバーが「そのお名前」を知らないため)。
  */
-async function syncExternalBookings(userId) {
+const externalSyncInFlight = new Map();
+
+async function performExternalBookingSync(userId) {
+  const [bookingNames, pairCustomerName, linkedCustomerName] = await Promise.all([
+    bookingStore.getDistinctCustomerNames(userId),
+    pairStore.getName(userId),
+    customerStore.getName(userId),
+  ]);
   const names = [...new Set([
-    ...await bookingStore.getDistinctCustomerNames(userId),
-    await pairStore.getName(userId),
-    await customerStore.getName(userId),
+    ...bookingNames,
+    pairCustomerName,
+    linkedCustomerName,
   ].filter(Boolean))];
-  if (names.length === 0) return; // 照合できるお名前がまだない
+  if (names.length === 0) return 0; // 照合できるお名前がまだない
 
-  for (const staff of config.staff) {
-    for (const name of names) {
-      let events;
-      try {
-        const monthStart = dayjs().tz(config.business.timezone).startOf('month').format('YYYY-MM-DD');
-        events = await searchEventsByName(staff.calendarId, name, monthStart);
-      } catch (err) {
-        console.error(`カレンダー検索でエラー(${staff.name} / ${name}):`, err);
-        continue;
-      }
-
-      for (const ev of events) {
-        if (await bookingStore.findByEventId(ev.id)) continue; // 既に取り込み済み
-
-        const store = getStoreForStaffAtTime(staff.id, ev.dateStr, ev.startTime);
-        // シフト時間外の予定は、店舗を安全に特定できないため予約として自動取り込みしない。
-        if (!store) continue;
-        const eventDuration = timeDiffMinutes(ev.startTime, ev.endTime);
-        const monthlyMember = await isMember(userId);
-        const durationMinutes = monthlyMember
-          ? await memberStore.getSessionDuration(userId) || eventDuration
-          : await ticketStore.isTicketCustomer(userId)
-            ? ticketStore.selectTicketDuration(await ticketStore.getBalances(userId), eventDuration)
-            : eventDuration;
-        const entitlement = await resolveBookingUsage(userId, ev.dateStr, durationMinutes);
-        await bookingStore.addBooking({
-          userId,
-          storeId: store.id,
-          storeName: store.name,
-          staffId: staff.id,
-          staffName: staff.name,
-          calendarId: staff.calendarId,
-          eventId: ev.id,
-          dateStr: ev.dateStr,
-          startTime: ev.startTime,
-          endTime: ev.endTime,
-          durationMinutes,
-          usageType: entitlement.available ? entitlement.usageType : (monthlyMember ? 'membership' : 'ticket'),
-          customerName: name,
-          source: 'calendar', // Googleカレンダーへの直接入力から取り込んだことが分かるように記録
-        });
-      }
+  const monthStart = dayjs().tz(config.business.timezone).startOf('month').format('YYYY-MM-DD');
+  const searches = await Promise.all(config.staff.flatMap((staff) => names.map(async (name) => {
+    try {
+      return { staff, name, events: await searchEventsByName(staff.calendarId, name, monthStart) };
+    } catch (err) {
+      console.error(`カレンダー検索でエラー(${staff.name} / ${name}):`, err);
+      return { staff, name, events: [] };
+    }
+  })));
+  const uniqueEvents = new Map();
+  for (const result of searches) {
+    for (const event of result.events) {
+      const key = `${result.staff.calendarId}:${event.id}`;
+      if (!uniqueEvents.has(key)) uniqueEvents.set(key, { ...result, event });
     }
   }
+
+  const [monthlyMember, ticketCustomer, memberDuration, ticketBalances] = await Promise.all([
+    isMember(userId),
+    ticketStore.isTicketCustomer(userId),
+    memberStore.getSessionDuration(userId),
+    ticketStore.getBalances(userId),
+  ]);
+  const candidates = [...uniqueEvents.values()];
+  const existingEvents = await Promise.all(candidates.map(({ event }) => bookingStore.findByEventId(event.id)));
+  let imported = 0;
+  for (let index = 0; index < candidates.length; index += 1) {
+    const { staff, name, event: ev } = candidates[index];
+    if (existingEvents[index]) continue; // 既に取り込み済み
+
+    const store = getStoreForStaffAtTime(staff.id, ev.dateStr, ev.startTime);
+    // シフト時間外の予定は、店舗を安全に特定できないため予約として自動取り込みしない。
+    if (!store) continue;
+    const eventDuration = timeDiffMinutes(ev.startTime, ev.endTime);
+    const durationMinutes = monthlyMember
+      ? memberDuration || eventDuration
+      : ticketCustomer
+        ? ticketStore.selectTicketDuration(ticketBalances, eventDuration)
+        : eventDuration;
+    const entitlement = await resolveBookingUsage(userId, ev.dateStr, durationMinutes);
+    const stored = await bookingStore.addExternalBooking({
+      userId,
+      storeId: store.id,
+      storeName: store.name,
+      staffId: staff.id,
+      staffName: staff.name,
+      calendarId: staff.calendarId,
+      eventId: ev.id,
+      dateStr: ev.dateStr,
+      startTime: ev.startTime,
+      endTime: ev.endTime,
+      durationMinutes,
+      usageType: entitlement.available ? entitlement.usageType : (monthlyMember ? 'membership' : 'ticket'),
+      customerName: name,
+      source: 'calendar', // Googleカレンダーへの直接入力から取り込んだことが分かるように記録
+    });
+    if (stored.created) imported += 1;
+  }
+  return imported;
+}
+
+async function syncExternalBookings(userId) {
+  if (externalSyncInFlight.has(userId)) return externalSyncInFlight.get(userId);
+  const promise = performExternalBookingSync(userId).finally(() => externalSyncInFlight.delete(userId));
+  externalSyncInFlight.set(userId, promise);
+  return promise;
 }
 
 /**

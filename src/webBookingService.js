@@ -282,4 +282,4 @@ async function change(userId, bookingId, input) {
   return { oldBooking, newBooking };
 }
 
-module.exports = { bootstrap, availability, weekAvailability, book, change };
+module.exports = { bootstrap, availability, weekAvailability, book, change, clearBootstrapCache };

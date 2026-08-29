@@ -1,4 +1,5 @@
 const db = require('./firestore');
+const crypto = require('node:crypto');
 const pairStore = require('./pairStore');
 const collection = db.collection('bookings');
 
@@ -6,6 +7,17 @@ async function addBooking(record) {
   const ref = collection.doc();
   await ref.set({ attended: false, ...record, bookingId: ref.id, status: 'confirmed' });
   return ref.id;
+}
+async function addExternalBooking(record) {
+  const sourceKey = `${record.calendarId}:${record.eventId}`;
+  const bookingId = `calendar_${crypto.createHash('sha256').update(sourceKey).digest('hex')}`;
+  const ref = collection.doc(bookingId);
+  return db.runTransaction(async (tx) => {
+    const snapshot = await tx.get(ref);
+    if (snapshot.exists) return { bookingId, created: false };
+    tx.set(ref, { attended: false, ...record, bookingId, status: 'confirmed' });
+    return { bookingId, created: true };
+  });
 }
 async function getBooking(id) {
   const snapshot = await collection.doc(id).get();
@@ -67,4 +79,4 @@ async function getBookingsForDate(dateStr) {
   return snapshot.docs.map((doc) => doc.data()).filter((b) => b.status === 'confirmed');
 }
 
-module.exports = { addBooking, getBooking, getBookingsByUser, updateBooking, cancelBooking, markAttended, getOutstandingCount, getMonthlyBookingCount, getMonthlyMembershipBookingCount, getOutstandingTicketBookingCount, getDistinctCustomerNames, findByEventId, getBookingsForDate };
+module.exports = { addBooking, addExternalBooking, getBooking, getBookingsByUser, updateBooking, cancelBooking, markAttended, getOutstandingCount, getMonthlyBookingCount, getMonthlyMembershipBookingCount, getOutstandingTicketBookingCount, getDistinctCustomerNames, findByEventId, getBookingsForDate };

@@ -76,6 +76,10 @@ async function init() {
     $('loading').hidden = true;
     $('app').hidden = false;
     await loadWeek();
+    api('sync-external', { method:'POST', body:'{}' }).then((latest) => {
+      data = latest;
+      $('member').innerHTML = `<strong>${data.customer.memberType}</strong>${data.customer.membershipDetail ? `<span>${data.customer.membershipDetail}</span>` : ''}`;
+    }).catch((error) => console.warn('Googleカレンダー直接予約の同期に失敗しました:', error));
   } catch (error) { showError(error.message); }
 }
 
