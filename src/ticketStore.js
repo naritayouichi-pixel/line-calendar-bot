@@ -26,6 +26,10 @@ async function getBalances(userId) {
   return { 45: record?.tickets?.[45] || 0, 60: record?.tickets?.[60] || 0 };
 }
 async function getName(userId) { return (await get(userId))?.name || null; }
+async function listTicketCustomers() {
+  const snapshot = await collection.get();
+  return snapshot.docs.map((doc) => ({ userId: doc.id, ...doc.data() }));
+}
 
 async function addTickets(userId, name, duration, count) {
   const ref = collection.doc(await pairStore.canonicalUserId(userId));
@@ -105,4 +109,4 @@ async function consumeForDueBooking(bookingId, dateStr, timeStr) {
   });
 }
 
-module.exports = { TICKET_DURATIONS, TICKET_PACKAGE_COUNTS, selectTicketDuration, isTicketCustomer, getBalance, getBalances, getName, addTickets, decrementTicket, registerAsTicketCustomer, consumeForDueBooking };
+module.exports = { TICKET_DURATIONS, TICKET_PACKAGE_COUNTS, selectTicketDuration, isTicketCustomer, getBalance, getBalances, getName, listTicketCustomers, addTickets, decrementTicket, registerAsTicketCustomer, consumeForDueBooking };

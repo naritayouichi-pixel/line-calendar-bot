@@ -14,6 +14,7 @@ const { createWebBookingToken, verifyWebBookingToken } = require('../src/webBook
 const { normalizeCustomerName, isPairCustomerName, pairLinkKey } = require('../src/customerStore');
 const { selectTicketDuration } = require('../src/ticketStore');
 const { selectUsage } = require('../src/bookingEntitlement');
+const { normalizeMatchText, eventMatchesCustomerName } = require('../src/externalBookingMatcher');
 
 test('required configuration and staff IDs are valid', () => {
   assert.ok(config.line.channelAccessToken);
@@ -50,6 +51,18 @@ test('direct calendar bookings resolve the store using the appointment time', ()
   assert.equal(shifts.getStoreForStaffAtTime('narita', '2026-09-18', '18:00').id, 'motosumiyoshi');
   assert.equal(shifts.getStoreForStaffAtTime('furuya', '2026-09-20', '16:00').id, 'jiyugaoka');
   assert.equal(shifts.getStoreForStaffAtTime('furuya', '2026-09-20', '18:00').id, 'motosumiyoshi');
+});
+
+test('direct ticket sync matches customer names despite spaces and honorifics', () => {
+  const timedEvent = {
+    summary: '中野 響子様 パーソナルトレーニング',
+    start: { dateTime: '2026-08-31T21:00:00+09:00' },
+    end: { dateTime: '2026-08-31T21:45:00+09:00' },
+  };
+  assert.equal(normalizeMatchText('中野 響子様'), '中野響子');
+  assert.equal(eventMatchesCustomerName(timedEvent, '中野響子'), true);
+  assert.equal(eventMatchesCustomerName(timedEvent, '東野淑恵'), false);
+  assert.equal(eventMatchesCustomerName({ summary: '中野響子', start: { date: '2026-08-31' } }, '中野響子'), false);
 });
 
 test('pair bookings on a staff calendar only block the store where that staff is working', () => {

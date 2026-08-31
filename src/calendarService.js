@@ -332,6 +332,7 @@ async function hasFullDayBlock(calendarId, dateStr, keyword, window = null) {
 }
 
 module.exports = {
+  getDayEvents,
   getAvailableSlots,
   getBookableStartTimes,
   createBooking,

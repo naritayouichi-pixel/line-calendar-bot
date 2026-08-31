@@ -10,6 +10,7 @@ const {
   getBookableStartTimes,
   createBooking,
   deleteBooking,
+  getDayEvents,
   searchEventsByName,
   hasFullDayBlock,
 } = require('./calendarService');
@@ -29,6 +30,7 @@ const webBookingService = require('./webBookingService');
 const trialBookingService = require('./trialBookingService');
 const squareService = require('./squareService');
 const { resolveBookingUsage, prepareDueBookingUsage } = require('./bookingEntitlement');
+const { eventMatchesCustomerName } = require('./externalBookingMatcher');
 const {
   buildStoreSelectionMessage,
   buildDatePickerMessage,
@@ -228,6 +230,13 @@ app.post('/tasks/consume-due-tickets', express.json(), async (req, res) => {
   const dateStr = now.format('YYYY-MM-DD');
   const timeStr = now.format('HH:mm');
   try {
+    try {
+      const imported = await syncNewDirectTicketBookingsForDate(dateStr);
+      if (imported) console.log('Googleカレンダー直接予約の定期同期:', { dateStr, imported });
+    } catch (syncError) {
+      // カレンダー同期に一時的な問題があっても、既に取り込み済みの予約消費は継続する。
+      console.error('チケット自動消費前のカレンダー同期でエラー:', syncError);
+    }
     const bookings = await bookingStore.getBookingsForDate(dateStr);
     const consumed = [];
     for (const booking of bookings) {
@@ -615,6 +624,53 @@ async function syncExternalBookings(userId) {
   const promise = performExternalBookingSync(userId).finally(() => externalSyncInFlight.delete(userId));
   externalSyncInFlight.set(userId, promise);
   return promise;
+}
+
+/**
+ * チケットを保有するお客様について、当日のGoogleカレンダー直接予約を定期的に見つける。
+ * 全顧客ごとにカレンダー検索を繰り返さず、まず各スタッフの当日予定を1回ずつ取得し、
+ * 未取り込みの予定名と一致したお客様だけを既存の同期処理へ渡す。
+ */
+async function syncNewDirectTicketBookingsForDate(dateStr) {
+  const [ticketCustomers, linkedCustomers, calendarResults] = await Promise.all([
+    ticketStore.listTicketCustomers(),
+    customerStore.listLinkedCustomers(),
+    Promise.all(config.staff.map(async (staff) => {
+      try {
+        return { staff, events: await getDayEvents(staff.calendarId, dateStr, true) };
+      } catch (error) {
+        console.error(`当日カレンダー取得でエラー(${staff.name}):`, error);
+        return { staff, events: [] };
+      }
+    })),
+  ]);
+
+  const linkedNames = new Map(linkedCustomers.map((customer) => [customer.userId, customer.name]));
+  const pairNames = await Promise.all(ticketCustomers.map((customer) => pairStore.getName(customer.userId)));
+  const candidates = ticketCustomers.map((customer, index) => ({
+    userId: customer.userId,
+    names: [...new Set([
+      linkedNames.get(customer.userId),
+      pairNames[index],
+      customer.name,
+    ].filter(Boolean))],
+  }));
+
+  const usersToSync = new Set();
+  for (const { events } of calendarResults) {
+    for (const event of events) {
+      const matched = candidates.filter((candidate) =>
+        candidate.names.some((name) => eventMatchesCustomerName(event, name))
+      );
+      if (!matched.length || await bookingStore.findByEventId(event.id)) continue;
+      for (const candidate of matched) usersToSync.add(candidate.userId);
+    }
+  }
+
+  const importedCounts = await Promise.all(
+    [...usersToSync].map((userId) => syncExternalBookings(userId))
+  );
+  return importedCounts.reduce((total, count) => total + count, 0);
 }
 
 /**
