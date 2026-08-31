@@ -220,6 +220,24 @@ app.post('/api/web-booking/change', express.json(), async (req, res) => {
   }
 });
 
+// 5分ごとにCloud Schedulerから呼び出し、Googleカレンダーへ直接入力された
+// 当日のチケット予約を予約データへ取り込む。
+app.post('/tasks/sync-direct-ticket-bookings', express.json(), async (req, res) => {
+  if (!config.automationTaskSecret || req.get('x-automation-secret') !== config.automationTaskSecret) {
+    return res.status(401).send('Unauthorized');
+  }
+
+  const dateStr = dayjs().tz(config.business.timezone).format('YYYY-MM-DD');
+  try {
+    const imported = await syncNewDirectTicketBookingsForDate(dateStr);
+    if (imported) console.log('Googleカレンダー直接予約の定期同期:', { dateStr, imported });
+    return res.status(200).json({ dateStr, imported });
+  } catch (error) {
+    console.error('Googleカレンダー直接予約の定期同期でエラー:', error);
+    return res.status(500).send('Failed');
+  }
+});
+
 // 毎分Cloud Schedulerから呼び出し、開始時刻になったチケット予約を自動消費する。
 app.post('/tasks/consume-due-tickets', express.json(), async (req, res) => {
   if (!config.automationTaskSecret || req.get('x-automation-secret') !== config.automationTaskSecret) {
@@ -230,13 +248,6 @@ app.post('/tasks/consume-due-tickets', express.json(), async (req, res) => {
   const dateStr = now.format('YYYY-MM-DD');
   const timeStr = now.format('HH:mm');
   try {
-    try {
-      const imported = await syncNewDirectTicketBookingsForDate(dateStr);
-      if (imported) console.log('Googleカレンダー直接予約の定期同期:', { dateStr, imported });
-    } catch (syncError) {
-      // カレンダー同期に一時的な問題があっても、既に取り込み済みの予約消費は継続する。
-      console.error('チケット自動消費前のカレンダー同期でエラー:', syncError);
-    }
     const bookings = await bookingStore.getBookingsForDate(dateStr);
     const consumed = [];
     for (const booking of bookings) {

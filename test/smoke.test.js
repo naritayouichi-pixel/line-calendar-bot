@@ -230,6 +230,7 @@ test('HTTP health, webhook, and ticket automation routes are registered', () => 
     .map((layer) => ({ path: layer.route.path, methods: layer.route.methods }));
   assert.ok(routes.some((route) => route.path === '/' && route.methods.get));
   assert.ok(routes.some((route) => route.path === '/webhook' && route.methods.post));
+  assert.ok(routes.some((route) => route.path === '/tasks/sync-direct-ticket-bookings' && route.methods.post));
   assert.ok(routes.some((route) => route.path === '/tasks/consume-due-tickets' && route.methods.post));
   assert.ok(routes.some((route) => route.path === '/tasks/send-monthly-reservation-reminder' && route.methods.post));
   assert.ok(routes.some((route) => route.path === '/api/web-booking/bootstrap' && route.methods.get));
