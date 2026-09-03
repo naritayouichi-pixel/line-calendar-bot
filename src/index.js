@@ -47,6 +47,7 @@ const {
   buildStaffCancelNotificationMessage,
   buildStaffChangeNotificationMessage,
   buildTicketPackageSelectionMessage,
+  buildAdminTicketControlMessage,
   buildAdminMemberManagementMessage,
   buildAdminTicketBalanceListMessages,
   buildAdminMonthlyPackageSelectionMessage,
@@ -55,6 +56,7 @@ const {
   buildAdminBillingRequestMessage,
   buildAdminAskCustomerIdMessage,
   buildAdminTicketAddedMessage,
+  buildAdminTicketSubtractedMessage,
   buildTicketBalanceMessage,
   buildTicketLimitReachedMessage,
   buildAdminAskQuotaMessage,
@@ -927,7 +929,7 @@ async function handleTicketAdminDialogue(event, adminUserId, text) {
     }
     pendingTicketAdmin.delete(adminUserId);
 
-    if (await isMember(customerId)) {
+    if (state.mode !== 'subtract' && await isMember(customerId)) {
       const memberDuration = await memberStore.getSessionDuration(customerId);
       if (memberDuration && memberDuration !== state.duration) {
         return replyText(event, `このお客様は月会費${memberDuration}分コースです。${memberDuration}分チケットを追加してください。`);
@@ -937,6 +939,21 @@ async function handleTicketAdminDialogue(event, adminUserId, text) {
     // お客様の名前が分かれば(過去にLINE予約したことがあれば)一緒に記録しておく
     const knownNames = await bookingStore.getDistinctCustomerNames(customerId);
     const name = knownNames[0] || await ticketStore.getName(customerId) || '(名前未登録)';
+
+    if (state.mode === 'subtract') {
+      const result = await ticketStore.removeTickets(customerId, state.duration, state.count);
+      if (!result) return replyText(event, 'このLINEユーザーIDのチケット登録が見つかりません。');
+      return client.replyMessage({
+        replyToken: event.replyToken,
+        messages: [buildAdminTicketSubtractedMessage(
+          customerId,
+          state.duration,
+          state.count,
+          result.removedCount,
+          result.newBalance
+        )],
+      });
+    }
 
     const newBalance = await ticketStore.addTickets(customerId, name, state.duration, state.count);
     return client.replyMessage({
@@ -1061,6 +1078,17 @@ async function handlePostback(event) {
   if (data.action === 'admin_ticket_add') {
     if (!config.adminUserIds.includes(userId)) return null;
     return client.replyMessage({ replyToken: event.replyToken, messages: [buildTicketPackageSelectionMessage()] });
+  }
+
+  if (data.action === 'admin_ticket_control') {
+    if (!config.adminUserIds.includes(userId)) return null;
+    return client.replyMessage({ replyToken: event.replyToken, messages: [buildAdminTicketControlMessage()] });
+  }
+
+  if (data.action === 'admin_ticket_operation') {
+    if (!config.adminUserIds.includes(userId)) return null;
+    const mode = data.mode === 'subtract' ? 'subtract' : 'add';
+    return client.replyMessage({ replyToken: event.replyToken, messages: [buildTicketPackageSelectionMessage(mode)] });
   }
 
   if (data.action === 'admin_monthly_change') {
@@ -1455,10 +1483,11 @@ async function handleSelectTicketPackage(event, data) {
   }
   const duration = Number(data.duration);
   const count = Number(data.count);
-  pendingTicketAdmin.set(adminUserId, { step: 'awaiting_customer_id', duration, count });
+  const mode = data.mode === 'subtract' ? 'subtract' : 'add';
+  pendingTicketAdmin.set(adminUserId, { step: 'awaiting_customer_id', mode, duration, count });
   return client.replyMessage({
     replyToken: event.replyToken,
-    messages: [buildAdminAskCustomerIdMessage(duration, count)],
+    messages: [buildAdminAskCustomerIdMessage(duration, count, mode)],
   });
 }
 

@@ -43,6 +43,21 @@ async function addTickets(userId, name, duration, count) {
   });
 }
 
+async function removeTickets(userId, duration, count) {
+  const ref = collection.doc(await pairStore.canonicalUserId(userId));
+  return db.runTransaction(async (tx) => {
+    const snapshot = await tx.get(ref);
+    if (!snapshot.exists) return null;
+    const old = snapshot.data();
+    const tickets = { 45: old.tickets?.[45] || 0, 60: old.tickets?.[60] || 0 };
+    const previousBalance = Number(tickets[duration] || 0);
+    const removedCount = Math.min(previousBalance, count);
+    tickets[duration] = previousBalance - removedCount;
+    tx.update(ref, { tickets });
+    return { previousBalance, removedCount, newBalance: tickets[duration] };
+  });
+}
+
 async function decrementTicket(userId, duration) {
   const ref = collection.doc(await pairStore.canonicalUserId(userId));
   return db.runTransaction(async (tx) => {
@@ -109,4 +124,4 @@ async function consumeForDueBooking(bookingId, dateStr, timeStr) {
   });
 }
 
-module.exports = { TICKET_DURATIONS, TICKET_PACKAGE_COUNTS, selectTicketDuration, isTicketCustomer, getBalance, getBalances, getName, listTicketCustomers, addTickets, decrementTicket, registerAsTicketCustomer, consumeForDueBooking };
+module.exports = { TICKET_DURATIONS, TICKET_PACKAGE_COUNTS, selectTicketDuration, isTicketCustomer, getBalance, getBalances, getName, listTicketCustomers, addTickets, removeTickets, decrementTicket, registerAsTicketCustomer, consumeForDueBooking };

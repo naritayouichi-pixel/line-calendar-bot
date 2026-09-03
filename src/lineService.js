@@ -678,7 +678,8 @@ function buildCurrentBookingsSummaryMessage(bookings) {
  * 管理者(成田さん等)が「チケット追加」と送った直後、
  * どのパッケージ(45分/60分 × 1・5・10回)を追加するか選ばせるメッセージ。
  */
-function buildTicketPackageSelectionMessage() {
+function buildTicketPackageSelectionMessage(mode = 'add') {
+  const isSubtract = mode === 'subtract';
   const durations = [45, 60];
   const counts = [1, 5, 10];
   const items = [];
@@ -689,16 +690,29 @@ function buildTicketPackageSelectionMessage() {
         action: {
           type: 'postback',
           label: `${duration}分×${count}回`,
-          data: `action=select_ticket_package&duration=${duration}&count=${count}`,
-          displayText: `${duration}分×${count}回を選択`,
+          data: `action=select_ticket_package&mode=${isSubtract ? 'subtract' : 'add'}&duration=${duration}&count=${count}`,
+          displayText: `${duration}分×${count}回を${isSubtract ? 'マイナス' : 'プラス'}`,
         },
       });
     }
   }
   return {
     type: 'text',
-    text: '追加するチケットの種類を選んでください。',
+    text: `${isSubtract ? 'マイナスする' : 'プラスする'}チケットの種類を選んでください。`,
     quickReply: { items },
+  };
+}
+
+function buildAdminTicketControlMessage() {
+  return {
+    type: 'text',
+    text: 'チケットの操作を選んでください。',
+    quickReply: {
+      items: [
+        { type: 'action', action: { type: 'postback', label: 'プラス', data: 'action=admin_ticket_operation&mode=add' } },
+        { type: 'action', action: { type: 'postback', label: 'マイナス', data: 'action=admin_ticket_operation&mode=subtract' } },
+      ],
+    },
   };
 }
 
@@ -708,7 +722,7 @@ function buildAdminMemberManagementMessage() {
     text: '変更する内容を選んでください。',
     quickReply: {
       items: [
-        { type: 'action', action: { type: 'postback', label: 'チケット付与', data: 'action=admin_ticket_add' } },
+        { type: 'action', action: { type: 'postback', label: 'チケットコントロール', data: 'action=admin_ticket_control' } },
         { type: 'action', action: { type: 'postback', label: '月会費コース変更', data: 'action=admin_monthly_change' } },
         { type: 'action', action: { type: 'postback', label: 'プラチナ昇格', data: 'action=admin_platinum&mode=register' } },
         { type: 'action', action: { type: 'postback', label: 'チケット残数一覧', data: 'action=admin_ticket_balance_list' } },
@@ -816,10 +830,11 @@ function buildAdminBillingRequestMessage(customerName, duration, count) {
 /**
  * パッケージ選択後、どのお客様に追加するか(LINEユーザーID)を尋ねるメッセージ。
  */
-function buildAdminAskCustomerIdMessage(duration, count) {
+function buildAdminAskCustomerIdMessage(duration, count, mode = 'add') {
+  const isSubtract = mode === 'subtract';
   return {
     type: 'text',
-    text: `${duration}分×${count}回のチケットを追加します。\n対象のお客様のLINEユーザーIDを送ってください。\n(お客様に「ID確認」と送ってもらうと確認できます)`,
+    text: `${duration}分チケットを${count}枚${isSubtract ? 'マイナス' : 'プラス'}します。\n対象のお客様のLINEユーザーIDを送ってください。\n(お客様に「ID確認」と送ってもらうと確認できます)`,
   };
 }
 
@@ -830,6 +845,16 @@ function buildAdminTicketAddedMessage(customerId, duration, count, newBalance) {
   return {
     type: 'text',
     text: `${duration}分チケットを${count}枚追加しました。\n対象ID: ${customerId}\n現在の${duration}分チケット残数: ${newBalance}枚`,
+  };
+}
+
+function buildAdminTicketSubtractedMessage(customerId, duration, requestedCount, removedCount, newBalance) {
+  const note = removedCount < requestedCount
+    ? `\n※残数が${removedCount}枚だったため、${removedCount}枚をマイナスしました。`
+    : '';
+  return {
+    type: 'text',
+    text: `${duration}分チケットを${removedCount}枚マイナスしました。\n対象ID: ${customerId}\n現在の${duration}分チケット残数: ${newBalance}枚${note}`,
   };
 }
 
@@ -1052,6 +1077,7 @@ module.exports = {
   buildStaffChangeNotificationMessage,
   buildCurrentBookingsSummaryMessage,
   buildTicketPackageSelectionMessage,
+  buildAdminTicketControlMessage,
   buildAdminMemberManagementMessage,
   buildAdminTicketBalanceListMessages,
   buildAdminMonthlyPackageSelectionMessage,
@@ -1060,6 +1086,7 @@ module.exports = {
   buildAdminBillingRequestMessage,
   buildAdminAskCustomerIdMessage,
   buildAdminTicketAddedMessage,
+  buildAdminTicketSubtractedMessage,
   buildTicketBalanceMessage,
   buildTicketLimitReachedMessage,
   buildAdminAskQuotaMessage,

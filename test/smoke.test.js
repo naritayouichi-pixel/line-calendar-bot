@@ -195,11 +195,17 @@ test('LINE menu builders produce valid message objects', () => {
   assert.ok(memberMenu.quickReply.items.some((item) => item.action.label === '顧客紐付け'));
   const adminMenu = messages.buildAdminMemberManagementMessage();
   assert.deepEqual(adminMenu.quickReply.items.map((item) => item.action.label), [
-    'チケット付与',
+    'チケットコントロール',
     '月会費コース変更',
     'プラチナ昇格',
     'チケット残数一覧',
   ]);
+  const ticketControl = messages.buildAdminTicketControlMessage();
+  assert.deepEqual(ticketControl.quickReply.items.map((item) => item.action.label), ['プラス', 'マイナス']);
+  const subtractPackages = messages.buildTicketPackageSelectionMessage('subtract');
+  assert.ok(subtractPackages.quickReply.items.every((item) => item.action.data.includes('mode=subtract')));
+  assert.match(messages.buildAdminAskCustomerIdMessage(45, 5, 'subtract').text, /5枚マイナス/);
+  assert.match(messages.buildAdminTicketSubtractedMessage('Utest', 45, 5, 3, 0).text, /3枚マイナス/);
   const balanceList = messages.buildAdminTicketBalanceListMessages([
     { name: '山田太郎', tickets: { 45: 2, 60: 0 } },
     { name: '佐藤花子', tickets: { 45: 0, 60: 0 } },
