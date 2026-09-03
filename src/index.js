@@ -48,6 +48,7 @@ const {
   buildStaffChangeNotificationMessage,
   buildTicketPackageSelectionMessage,
   buildAdminMemberManagementMessage,
+  buildAdminTicketBalanceListMessages,
   buildAdminMonthlyPackageSelectionMessage,
   buildTicketSelfPurchaseSelectionMessage,
   buildTicketSelfPurchasedMessage,
@@ -1065,6 +1066,15 @@ async function handlePostback(event) {
   if (data.action === 'admin_monthly_change') {
     if (!config.adminUserIds.includes(userId)) return null;
     return client.replyMessage({ replyToken: event.replyToken, messages: [buildAdminMonthlyPackageSelectionMessage()] });
+  }
+
+  if (data.action === 'admin_ticket_balance_list') {
+    if (!config.adminUserIds.includes(userId)) return null;
+    const customers = await ticketStore.listTicketCustomers();
+    return client.replyMessage({
+      replyToken: event.replyToken,
+      messages: buildAdminTicketBalanceListMessages(customers),
+    });
   }
 
   if (data.action === 'admin_monthly_package') {

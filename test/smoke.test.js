@@ -198,8 +198,15 @@ test('LINE menu builders produce valid message objects', () => {
     'チケット付与',
     '月会費コース変更',
     'プラチナ昇格',
-    'プラチナ解除',
+    'チケット残数一覧',
   ]);
+  const balanceList = messages.buildAdminTicketBalanceListMessages([
+    { name: '山田太郎', tickets: { 45: 2, 60: 0 } },
+    { name: '佐藤花子', tickets: { 45: 0, 60: 0 } },
+  ]);
+  assert.equal(balanceList.length, 1);
+  assert.match(balanceList[0].text, /山田太郎：45分 2枚/);
+  assert.match(balanceList[0].text, /佐藤花子：残数 0枚/);
   const confirmed = messages.buildBookingConfirmedMessage(
     '自由が丘店', '成田', '2026-08-12', '10:00', '11:00', '山田太郎'
   );

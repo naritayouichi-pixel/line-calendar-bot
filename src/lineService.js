@@ -711,10 +711,40 @@ function buildAdminMemberManagementMessage() {
         { type: 'action', action: { type: 'postback', label: 'チケット付与', data: 'action=admin_ticket_add' } },
         { type: 'action', action: { type: 'postback', label: '月会費コース変更', data: 'action=admin_monthly_change' } },
         { type: 'action', action: { type: 'postback', label: 'プラチナ昇格', data: 'action=admin_platinum&mode=register' } },
-        { type: 'action', action: { type: 'postback', label: 'プラチナ解除', data: 'action=admin_platinum&mode=unregister' } },
+        { type: 'action', action: { type: 'postback', label: 'チケット残数一覧', data: 'action=admin_ticket_balance_list' } },
       ],
     },
   };
+}
+
+function buildAdminTicketBalanceListMessages(customers) {
+  const sorted = [...customers].sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ja'));
+  if (sorted.length === 0) {
+    return [{ type: 'text', text: 'チケット会員は登録されていません。' }];
+  }
+
+  const lines = sorted.map((customer) => {
+    const balance45 = Number(customer.tickets?.[45] || 0);
+    const balance60 = Number(customer.tickets?.[60] || 0);
+    const balances = [];
+    if (balance45 > 0) balances.push(`45分 ${balance45}枚`);
+    if (balance60 > 0) balances.push(`60分 ${balance60}枚`);
+    if (balances.length === 0) balances.push('残数 0枚');
+    return `${customer.name || '(名前未登録)'}：${balances.join('／')}`;
+  });
+
+  const messages = [];
+  let text = `チケット残数一覧（${sorted.length}名）`;
+  for (const line of lines) {
+    if (`${text}\n${line}`.length > 4500) {
+      messages.push({ type: 'text', text });
+      text = `チケット残数一覧（続き）\n${line}`;
+    } else {
+      text += `\n${line}`;
+    }
+  }
+  messages.push({ type: 'text', text });
+  return messages.slice(0, 5);
 }
 
 function buildAdminMonthlyPackageSelectionMessage() {
@@ -1023,6 +1053,7 @@ module.exports = {
   buildCurrentBookingsSummaryMessage,
   buildTicketPackageSelectionMessage,
   buildAdminMemberManagementMessage,
+  buildAdminTicketBalanceListMessages,
   buildAdminMonthlyPackageSelectionMessage,
   buildTicketSelfPurchaseSelectionMessage,
   buildTicketSelfPurchasedMessage,
