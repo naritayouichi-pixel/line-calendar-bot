@@ -716,6 +716,34 @@ function buildAdminTicketControlMessage() {
   };
 }
 
+function buildAdminAskTicketCustomerMessage(mode = 'add') {
+  return {
+    type: 'text',
+    text: `チケットを${mode === 'subtract' ? 'マイナス' : 'プラス'}するお客様のLINEユーザーIDを送ってください。\n(お客様に「ID確認」と送ってもらうと確認できます)`,
+  };
+}
+
+function buildAdminTicketCountSelectionMessage(mode, duration, currentBalance) {
+  const operationLabel = mode === 'subtract' ? 'マイナス' : 'プラス';
+  const items = Array.from({ length: 10 }, (_, index) => {
+    const count = index + 1;
+    return {
+      type: 'action',
+      action: {
+        type: 'postback',
+        label: `${count}枚`,
+        data: `action=admin_ticket_count&count=${count}`,
+        displayText: `${count}枚${operationLabel}`,
+      },
+    };
+  });
+  return {
+    type: 'text',
+    text: `${duration}分チケット（現在${currentBalance}枚）\n${operationLabel}する枚数を選んでください。`,
+    quickReply: { items },
+  };
+}
+
 function buildAdminMemberManagementMessage() {
   return {
     type: 'text',
@@ -1078,6 +1106,8 @@ module.exports = {
   buildCurrentBookingsSummaryMessage,
   buildTicketPackageSelectionMessage,
   buildAdminTicketControlMessage,
+  buildAdminAskTicketCustomerMessage,
+  buildAdminTicketCountSelectionMessage,
   buildAdminMemberManagementMessage,
   buildAdminTicketBalanceListMessages,
   buildAdminMonthlyPackageSelectionMessage,

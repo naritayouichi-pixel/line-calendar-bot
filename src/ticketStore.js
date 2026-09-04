@@ -26,6 +26,16 @@ async function getBalances(userId) {
   return { 45: record?.tickets?.[45] || 0, 60: record?.tickets?.[60] || 0 };
 }
 async function getName(userId) { return (await get(userId))?.name || null; }
+async function getPreferredDuration(userId) {
+  const record = await get(userId);
+  const storedDuration = Number(record?.duration);
+  if (TICKET_DURATIONS.includes(storedDuration)) return storedDuration;
+  const balance45 = Number(record?.tickets?.[45] || 0);
+  const balance60 = Number(record?.tickets?.[60] || 0);
+  if (balance45 > 0 && balance60 <= 0) return 45;
+  if (balance60 > 0 && balance45 <= 0) return 60;
+  return null;
+}
 async function listTicketCustomers() {
   const snapshot = await collection.get();
   return snapshot.docs.map((doc) => ({ userId: doc.id, ...doc.data() }));
@@ -38,7 +48,7 @@ async function addTickets(userId, name, duration, count) {
     const old = snapshot.exists ? snapshot.data() : {};
     const tickets = { 45: old.tickets?.[45] || 0, 60: old.tickets?.[60] || 0 };
     tickets[duration] += count;
-    tx.set(ref, { name: name || old.name || '(名前未登録)', tickets });
+    tx.set(ref, { name: name || old.name || '(名前未登録)', tickets, duration });
     return tickets[duration];
   });
 }
@@ -53,7 +63,7 @@ async function removeTickets(userId, duration, count) {
     const previousBalance = Number(tickets[duration] || 0);
     const removedCount = Math.min(previousBalance, count);
     tickets[duration] = previousBalance - removedCount;
-    tx.update(ref, { tickets });
+    tx.update(ref, { tickets, duration });
     return { previousBalance, removedCount, newBalance: tickets[duration] };
   });
 }
@@ -124,4 +134,4 @@ async function consumeForDueBooking(bookingId, dateStr, timeStr) {
   });
 }
 
-module.exports = { TICKET_DURATIONS, TICKET_PACKAGE_COUNTS, selectTicketDuration, isTicketCustomer, getBalance, getBalances, getName, listTicketCustomers, addTickets, removeTickets, decrementTicket, registerAsTicketCustomer, consumeForDueBooking };
+module.exports = { TICKET_DURATIONS, TICKET_PACKAGE_COUNTS, selectTicketDuration, isTicketCustomer, getBalance, getBalances, getName, getPreferredDuration, listTicketCustomers, addTickets, removeTickets, decrementTicket, registerAsTicketCustomer, consumeForDueBooking };
