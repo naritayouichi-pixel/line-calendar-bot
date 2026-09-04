@@ -772,7 +772,10 @@ function buildAdminTicketBalanceListMessages(customers) {
     if (balance45 > 0) balances.push(`45分 ${balance45}枚`);
     if (balance60 > 0) balances.push(`60分 ${balance60}枚`);
     if (balances.length === 0) balances.push('残数 0枚');
-    return `${customer.name || '(名前未登録)'}：${balances.join('／')}`;
+    const displayName = customer.name && customer.name !== '(名前未登録)'
+      ? customer.name
+      : `(名前未登録・ID末尾${String(customer.userId || '').slice(-4) || '不明'})`;
+    return `${displayName}：${balances.join('／')}`;
   });
 
   const messages = [];

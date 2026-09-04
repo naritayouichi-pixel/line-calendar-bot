@@ -435,6 +435,30 @@ async function buildMemberMenu(userId) {
   return buildMemberMenuMessage('ビジター(会員登録なし)', null);
 }
 
+async function resolveTicketCustomerName(customer) {
+  if (customer.name && customer.name !== '(名前未登録)') return customer.name;
+  const memberUserIds = await pairStore.getMemberIds(customer.userId);
+  const pairName = await pairStore.getName(customer.userId);
+  if (pairName) return pairName;
+  for (const memberUserId of memberUserIds) {
+    const linkedName = await customerStore.getName(memberUserId);
+    if (linkedName) return linkedName;
+    const memberName = await memberStore.getName(memberUserId);
+    if (memberName && memberName !== '(名前未登録)') return memberName;
+    const bookingNames = await bookingStore.getDistinctCustomerNames(memberUserId);
+    if (bookingNames[0]) return bookingNames[0];
+  }
+  return null;
+}
+
+async function enrichTicketCustomerNames(customers) {
+  return Promise.all(customers.map(async (customer) => {
+    const name = await resolveTicketCustomerName(customer);
+    if (name && name !== customer.name) await ticketStore.updateNameIfMissing(customer.userId, name);
+    return name ? { ...customer, name } : customer;
+  }));
+}
+
 /**
  * 「予約」の開始処理(店舗選択の表示)。テキストの合言葉・リッチメニューのpostback両方から呼ぶ。
  */
@@ -947,8 +971,10 @@ async function handleTicketAdminDialogue(event, adminUserId, text) {
       return replyText(event, 'このお客様のチケット時間を自動判定できませんでした。LINEユーザーIDと会員登録を確認してください。');
     }
 
-    const knownNames = await bookingStore.getDistinctCustomerNames(customerId);
-    const name = knownNames[0] || await ticketStore.getName(customerId) || '(名前未登録)';
+    const name = await resolveTicketCustomerName({
+      userId: customerId,
+      name: await ticketStore.getName(customerId),
+    }) || '(名前未登録)';
     const currentBalance = await ticketStore.getBalance(customerId, duration);
     pendingTicketAdmin.set(adminUserId, {
       step: 'awaiting_count',
@@ -1130,7 +1156,7 @@ async function handlePostback(event) {
 
   if (data.action === 'admin_ticket_balance_list') {
     if (!config.adminUserIds.includes(userId)) return null;
-    const customers = await ticketStore.listTicketCustomers();
+    const customers = await enrichTicketCustomerNames(await ticketStore.listTicketCustomers());
     return client.replyMessage({
       replyToken: event.replyToken,
       messages: buildAdminTicketBalanceListMessages(customers),

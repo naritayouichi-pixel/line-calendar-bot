@@ -26,6 +26,16 @@ async function getBalances(userId) {
   return { 45: record?.tickets?.[45] || 0, 60: record?.tickets?.[60] || 0 };
 }
 async function getName(userId) { return (await get(userId))?.name || null; }
+async function updateNameIfMissing(userId, name) {
+  if (!name || name === '(名前未登録)') return false;
+  const ref = collection.doc(await pairStore.canonicalUserId(userId));
+  return db.runTransaction(async (tx) => {
+    const snapshot = await tx.get(ref);
+    if (!snapshot.exists || (snapshot.data().name && snapshot.data().name !== '(名前未登録)')) return false;
+    tx.update(ref, { name });
+    return true;
+  });
+}
 async function getPreferredDuration(userId) {
   const record = await get(userId);
   const storedDuration = Number(record?.duration);
@@ -134,4 +144,4 @@ async function consumeForDueBooking(bookingId, dateStr, timeStr) {
   });
 }
 
-module.exports = { TICKET_DURATIONS, TICKET_PACKAGE_COUNTS, selectTicketDuration, isTicketCustomer, getBalance, getBalances, getName, getPreferredDuration, listTicketCustomers, addTickets, removeTickets, decrementTicket, registerAsTicketCustomer, consumeForDueBooking };
+module.exports = { TICKET_DURATIONS, TICKET_PACKAGE_COUNTS, selectTicketDuration, isTicketCustomer, getBalance, getBalances, getName, updateNameIfMissing, getPreferredDuration, listTicketCustomers, addTickets, removeTickets, decrementTicket, registerAsTicketCustomer, consumeForDueBooking };
